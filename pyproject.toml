@@ -1,0 +1,28 @@
+[project]
+name = "amm-gym"
+version = "0.1.0"
+description = "Gymnasium environment for RL-based AMM fee setting"
+requires-python = ">=3.9"
+dependencies = [
+    "gymnasium>=0.29",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+rl = [
+    "torch>=2.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["amm_gym*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
