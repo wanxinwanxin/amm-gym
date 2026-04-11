@@ -71,6 +71,24 @@ class TestEnvAPI:
 
         np.testing.assert_array_equal(rewards_a, rewards_b)
 
+    def test_reset_without_seed_produces_fresh_episode(self, short_config):
+        env = AMMFeeEnv(config=short_config)
+        action = np.array([0.003, 0.003], dtype=np.float32)
+
+        env.reset(seed=42)
+        rewards_seeded = []
+        for _ in range(10):
+            _, reward, _, _, _ = env.step(action)
+            rewards_seeded.append(reward)
+
+        env.reset()
+        rewards_unseeded = []
+        for _ in range(10):
+            _, reward, _, _, _ = env.step(action)
+            rewards_unseeded.append(reward)
+
+        assert rewards_unseeded != rewards_seeded
+
 
 class TestEnvBehavior:
     """Verify economic behavior makes sense."""
@@ -129,3 +147,14 @@ class TestEnvBehavior:
             total_reward += reward
 
         assert total_reward == pytest.approx(info["edge"], rel=1e-6)
+
+    def test_zero_retail_rate_yields_zero_flow(self):
+        config = SimConfig(n_steps=20, retail_arrival_rate=0.0, seed=42)
+        env = AMMFeeEnv(config=config)
+        env.reset(seed=42)
+
+        action = np.array([0.003, 0.003], dtype=np.float32)
+        for _ in range(20):
+            _, _, _, _, _ = env.step(action)
+            assert env._ema_count == 0.0
+            assert env._ema_volume == 0.0

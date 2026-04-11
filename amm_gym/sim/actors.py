@@ -162,7 +162,10 @@ class RetailTrader:
         self._ln_sigma = self.size_sigma
 
     def generate_orders(self) -> list[RetailOrder]:
-        n = self.rng.poisson(max(self.arrival_rate, 0.01))
+        if self.arrival_rate <= 0.0:
+            return []
+
+        n = self.rng.poisson(self.arrival_rate)
         if n == 0:
             return []
 

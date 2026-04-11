@@ -54,11 +54,10 @@ class SimulationEngine:
 
     def __init__(self, config: SimConfig) -> None:
         self.config = config
-        self._reset_state()
+        self._reset_state(seed=config.seed)
 
-    def _reset_state(self) -> None:
+    def _reset_state(self, seed: int | None) -> None:
         cfg = self.config
-        seed = cfg.seed if cfg.seed is not None else 0
 
         self.price_process = GBMPriceProcess(
             cfg.initial_price, cfg.gbm_mu, cfg.gbm_sigma, cfg.gbm_dt,
@@ -70,7 +69,7 @@ class SimulationEngine:
             cfg.retail_mean_size,
             cfg.retail_size_sigma,
             cfg.retail_buy_prob,
-            seed=seed + 1,
+            seed=None if seed is None else seed + 1,
         )
 
         self.arbitrageur = Arbitrageur()
@@ -106,9 +105,7 @@ class SimulationEngine:
 
     def reset(self, seed: int | None = None) -> None:
         """Reset for a new episode."""
-        if seed is not None:
-            self.config.seed = seed
-        self._reset_state()
+        self._reset_state(seed=seed)
 
     def set_agent_fees(self, bid_fee: float, ask_fee: float) -> None:
         """Set the agent AMM's fees (called by RL agent before each step)."""

@@ -254,6 +254,37 @@ class TestStatisticalProperties:
         assert math.isfinite(result.edges["normalizer"])
         assert math.isfinite(result.pnls["normalizer"])
 
+    def test_reset_with_same_seed_replays_episode(self):
+        engine = SimulationEngine(SimConfig(n_steps=20))
+
+        engine.reset(seed=42)
+        first_run = [engine.step().fair_price for _ in range(10)]
+
+        engine.reset(seed=42)
+        second_run = [engine.step().fair_price for _ in range(10)]
+
+        assert second_run == pytest.approx(first_run)
+
+    def test_reset_without_seed_after_seeded_episode_is_not_deterministic(self):
+        engine = SimulationEngine(SimConfig(n_steps=20))
+
+        engine.reset(seed=42)
+        seeded_run = [engine.step().fair_price for _ in range(10)]
+
+        engine.reset()
+        unseeded_run = [engine.step().fair_price for _ in range(10)]
+
+        assert unseeded_run != seeded_run
+
+    def test_zero_retail_rate_produces_no_orders_or_volume(self):
+        engine = SimulationEngine(SimConfig(n_steps=50, retail_arrival_rate=0.0, seed=42))
+
+        while not engine.done:
+            result = engine.step()
+            assert result.n_retail_orders == 0
+            assert result.retail_volume_y["submission"] == 0.0
+            assert result.retail_volume_y["normalizer"] == 0.0
+
 
 # ---------------------------------------------------------------------------
 # Direct comparison with amm_sim_rs (if available)

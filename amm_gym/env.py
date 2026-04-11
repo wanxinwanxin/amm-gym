@@ -8,6 +8,7 @@ Reward: per-step change in agent AMM edge.
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import replace
 from typing import Any
 
 import gymnasium as gym
@@ -91,10 +92,8 @@ class AMMFeeEnv(gym.Env):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
 
-        # Use Gymnasium's seeding
-        env_seed = seed if seed is not None else self.config.seed
-        self.engine = SimulationEngine(self.config)
-        self.engine.reset(seed=env_seed)
+        engine_config = replace(self.config, seed=seed)
+        self.engine = SimulationEngine(engine_config)
 
         self._initial_value = (
             self.config.initial_x * self.config.initial_price

@@ -131,6 +131,11 @@ class TestRetailTrader:
         # E[X] = mean_size for log-normal with our parameterization
         assert np.mean(sizes) == pytest.approx(2.0, rel=0.05)
 
+    def test_zero_arrival_rate_disables_retail_flow(self):
+        trader = RetailTrader(0.0, 2.0, 0.7, 0.5, seed=42)
+        for _ in range(100):
+            assert trader.generate_orders() == []
+
 
 # ---------------------------------------------------------------------------
 # Router tests
