@@ -89,6 +89,18 @@ class TestEnvAPI:
 
         assert rewards_unseeded != rewards_seeded
 
+    def test_reset_observation_is_independent_of_initial_price(self):
+        config_a = SimConfig(n_steps=10, initial_price=100.0, seed=42)
+        config_b = SimConfig(n_steps=10, initial_price=250.0, seed=42)
+
+        env_a = AMMFeeEnv(config=config_a)
+        env_b = AMMFeeEnv(config=config_b)
+
+        obs_a, _ = env_a.reset(seed=42)
+        obs_b, _ = env_b.reset(seed=42)
+
+        np.testing.assert_array_equal(obs_a, obs_b)
+
 
 class TestEnvBehavior:
     """Verify economic behavior makes sense."""
@@ -148,13 +160,33 @@ class TestEnvBehavior:
 
         assert total_reward == pytest.approx(info["edge"], rel=1e-6)
 
-    def test_zero_retail_rate_yields_zero_flow(self):
-        config = SimConfig(n_steps=20, retail_arrival_rate=0.0, seed=42)
+    def test_reward_is_delayed_by_one_step(self):
+        config = SimConfig(n_steps=10, seed=42)
         env = AMMFeeEnv(config=config)
         env.reset(seed=42)
 
         action = np.array([0.003, 0.003], dtype=np.float32)
+        _, reward0, _, _, info0 = env.step(action)
+        _, reward1, _, _, _ = env.step(action)
+
+        assert reward0 == pytest.approx(0.0)
+        assert reward1 == pytest.approx(info0["edge"], rel=1e-6, abs=1e-6)
+
+    def test_zero_retail_rate_yields_zero_flow(self):
+        config = SimConfig(n_steps=20, retail_arrival_rate=0.0, seed=42)
+        env = AMMFeeEnv(config=config)
+        obs, _ = env.reset(seed=42)
+
+        action = np.array([0.003, 0.003], dtype=np.float32)
+        ws = env.window_size
+        assert obs[ws + 4] == 0.0
+        assert obs[ws + 5] == 0.0
+        assert obs[ws + 6] == 0.0
         for _ in range(20):
-            _, _, _, _, _ = env.step(action)
-            assert env._ema_count == 0.0
-            assert env._ema_volume == 0.0
+            _, _, _, _, info = env.step(action)
+            assert env._ema_exec_count == 0.0
+            assert env._ema_exec_volume == 0.0
+            assert env._ema_net_flow == 0.0
+            assert info["execution_count"] == 0
+            assert info["execution_volume_y"] == 0.0
+            assert info["net_flow_y"] == 0.0

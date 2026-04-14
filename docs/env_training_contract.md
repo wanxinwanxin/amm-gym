@@ -30,37 +30,46 @@ Observation dtype is `np.float32`. Shape is `(window_size + 11,)`.
 For `ws = window_size`, the observation layout is:
 
 - `obs[0:ws]`: recent log returns, left-padded with zeros
-- `obs[ws]`: agent reserve X value normalized by initial portfolio value
-- `obs[ws + 1]`: agent reserve Y normalized by initial portfolio value
-- `obs[ws + 2]`: inventory imbalance in `[-1, 1]`
-- `obs[ws + 3]`: cumulative agent edge normalized by initial portfolio value
-- `obs[ws + 4]`: EMA of routed retail volume normalized by initial value
-- `obs[ws + 5]`: EMA of retail order count normalized by arrival rate proxy
-- `obs[ws + 6]`: EMA buy-ratio proxy
+- `obs[ws]`: agent reserve X normalized by initial X
+- `obs[ws + 1]`: agent reserve Y normalized by initial Y
+- `obs[ws + 2]`: public reserve imbalance in `[-1, 1]`
+- `obs[ws + 3]`: cumulative agent edge normalized by initial portfolio value, lagged by one step
+- `obs[ws + 4]`: EMA of executed volume normalized by initial portfolio value
+- `obs[ws + 5]`: EMA of execution count normalized by arrival-rate proxy
+- `obs[ws + 6]`: EMA of signed net Y flow normalized by initial portfolio value
 - `obs[ws + 7]`: current bid fee
 - `obs[ws + 8]`: current ask fee
 - `obs[ws + 9]`: rolling volatility estimate
 - `obs[ws + 10]`: episode progress in `[0, 1]`
 
+The observation does not expose hidden retail labels such as routed retail
+count, retail volume, or buy-ratio proxies. Any price-dependent signal is
+derived from the last completed step only.
+
 ## Reward Contract
 
-- Reward is the per-step change in agent edge:
-  `reward_t = edge_t(submission) - edge_{t-1}(submission)`
-- Episode reward sums to final agent edge.
+- Reward is returned one step after the markout that generated it:
+  `reward_t` is the realized edge change from the previous completed step.
+- The first post-reset step returns zero reward.
+- The final step flushes the last pending markout so episode reward still sums
+  to final agent edge.
 
 ## Info Contract
 
-Training and evaluation code may rely on these `info` keys:
+Training and evaluation code may rely on these `info` keys for logging and
+analysis only. They are diagnostic, not policy inputs.
 
 - `edge`
 - `edge_normalizer`
 - `pnl`
 - `pnl_normalizer`
-- `fair_price`
 - `spot_price`
 - `step`
 - `bid_fee`
 - `ask_fee`
+- `execution_count`
+- `execution_volume_y`
+- `net_flow_y`
 
 ## Seeding Contract
 
@@ -78,4 +87,3 @@ Training and evaluation code may rely on these `info` keys:
   core control flow.
 - Any future breaking change to observation layout, reward semantics, or action
   meaning should update this document before the trainer is adapted.
-

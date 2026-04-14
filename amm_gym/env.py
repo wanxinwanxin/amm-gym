@@ -1,8 +1,8 @@
 """Gymnasium environment for AMM fee setting.
 
-Observation: ~15-dim vector of market state.
+Observation: compact vector of public market state plus lagged price history.
 Action: (bid_fee, ask_fee) continuous.
-Reward: per-step change in agent AMM edge.
+Reward: one-step delayed change in agent AMM edge.
 """
 
 from __future__ import annotations
@@ -52,15 +52,15 @@ class AMMFeeEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Observation: 15-dim vector
+        # Observation: compact market-state vector
         # [0:window_size] recent log-returns
-        # [ws] reserve_x (normalized)
-        # [ws+1] reserve_y (normalized)
-        # [ws+2] inventory imbalance [-1, 1]
-        # [ws+3] edge so far (normalized)
-        # [ws+4] recent retail volume EMA (normalized)
-        # [ws+5] recent retail count EMA
-        # [ws+6] recent buy ratio [0, 1]
+        # [ws] reserve_x (normalized by initial X)
+        # [ws+1] reserve_y (normalized by initial Y)
+        # [ws+2] reserve imbalance [-1, 1]
+        # [ws+3] lagged edge so far (normalized)
+        # [ws+4] EMA of executed volume (normalized)
+        # [ws+5] EMA of execution count
+        # [ws+6] EMA of signed net Y flow (normalized)
         # [ws+7] current bid fee
         # [ws+8] current ask fee
         # [ws+9] volatility estimate
@@ -75,13 +75,14 @@ class AMMFeeEnv(gym.Env):
         self._return_history: deque[float] = deque(maxlen=window_size)
         self._vol_window: deque[float] = deque(maxlen=50)
 
-        # EMA state for trade stats
-        self._ema_volume = 0.0
-        self._ema_count = 0.0
-        self._ema_buy_ratio = 0.5
+        # EMA state for observable execution stats
+        self._ema_exec_volume = 0.0
+        self._ema_exec_count = 0.0
+        self._ema_net_flow = 0.0
         self._ema_alpha = 0.1
 
         self._prev_edge = 0.0
+        self._pending_reward = 0.0
         self._initial_value = 0.0
 
     def reset(
@@ -105,10 +106,11 @@ class AMMFeeEnv(gym.Env):
         self._vol_window.clear()
         self._price_history.append(self.config.initial_price)
 
-        self._ema_volume = 0.0
-        self._ema_count = 0.0
-        self._ema_buy_ratio = 0.5
+        self._ema_exec_volume = 0.0
+        self._ema_exec_count = 0.0
+        self._ema_net_flow = 0.0
         self._prev_edge = 0.0
+        self._pending_reward = 0.0
 
         obs = self._get_obs()
         info = {"edge": 0.0, "pnl": 0.0, "step": 0}
@@ -135,21 +137,28 @@ class AMMFeeEnv(gym.Env):
             self._return_history.append(log_ret)
             self._vol_window.append(log_ret)
 
-        # Update trade EMA stats
+        # Update execution EMA stats
         alpha = self._ema_alpha
-        agent_vol = result.retail_volume_y.get("submission", 0.0)
-        self._ema_volume = (1 - alpha) * self._ema_volume + alpha * agent_vol
-        self._ema_count = (1 - alpha) * self._ema_count + alpha * result.n_retail_orders
+        agent_exec_volume = result.execution_volume_y.get("submission", 0.0)
+        agent_exec_count = result.execution_count.get("submission", 0)
+        agent_net_flow = result.net_flow_y.get("submission", 0.0)
+        self._ema_exec_volume = (
+            (1 - alpha) * self._ema_exec_volume + alpha * agent_exec_volume
+        )
+        self._ema_exec_count = (
+            (1 - alpha) * self._ema_exec_count + alpha * agent_exec_count
+        )
+        self._ema_net_flow = (
+            (1 - alpha) * self._ema_net_flow + alpha * agent_net_flow
+        )
 
-        # Buy ratio from routed trades (approximate from orders)
-        if result.n_retail_orders > 0:
-            # We don't have per-order side info here, use a proxy:
-            # if AMM's spot is near fair, roughly 50/50
-            self._ema_buy_ratio = (1 - alpha) * self._ema_buy_ratio + alpha * 0.5
-
-        # Reward = change in agent edge
+        # Reward is delayed by one step to avoid exposing same-step markout.
         current_edge = result.edges.get("submission", 0.0)
-        reward = current_edge - self._prev_edge
+        current_reward = current_edge - self._prev_edge
+        reward = self._pending_reward
+        if self.engine.done:
+            reward += current_reward
+        self._pending_reward = current_reward
         self._prev_edge = current_edge
 
         terminated = self.engine.done
@@ -161,11 +170,13 @@ class AMMFeeEnv(gym.Env):
             "edge_normalizer": result.edges.get("normalizer", 0.0),
             "pnl": result.pnls.get("submission", 0.0),
             "pnl_normalizer": result.pnls.get("normalizer", 0.0),
-            "fair_price": result.fair_price,
             "spot_price": result.spot_prices.get("submission", 0.0),
             "step": result.timestamp,
             "bid_fee": bid_fee,
             "ask_fee": ask_fee,
+            "execution_count": agent_exec_count,
+            "execution_volume_y": agent_exec_volume,
+            "net_flow_y": agent_net_flow,
         }
 
         return obs, float(reward), terminated, truncated, info
@@ -182,26 +193,29 @@ class AMMFeeEnv(gym.Env):
             obs[ws - len(returns[-ws:]) + i] = r
 
         amm = self.engine.amm_agent
-        fair = self.engine.current_fair_price
+        init_x = max(self.config.initial_x, 1.0)
+        init_y = max(self.config.initial_y, 1.0)
         init_val = max(self._initial_value, 1.0)
 
-        # Reserves (normalized by initial value)
-        obs[ws] = (amm.reserve_x * fair) / init_val
-        obs[ws + 1] = amm.reserve_y / init_val
+        # Public reserves, normalized without using the current fair price.
+        obs[ws] = amm.reserve_x / init_x
+        obs[ws + 1] = amm.reserve_y / init_y
 
-        # Inventory imbalance: (value_x - value_y) / (value_x + value_y)
-        val_x = amm.reserve_x * fair
-        val_y = amm.reserve_y
-        total = val_x + val_y
-        obs[ws + 2] = (val_x - val_y) / total if total > 0 else 0.0
+        # Reserve imbalance from public quantities only.
+        total_reserves = obs[ws] + obs[ws + 1]
+        obs[ws + 2] = (
+            (obs[ws] - obs[ws + 1]) / total_reserves if total_reserves > 0 else 0.0
+        )
 
-        # Edge so far (normalized)
+        # Lagged edge so far (normalized)
         obs[ws + 3] = self._prev_edge / init_val
 
-        # Trade flow stats (EMA, normalized)
-        obs[ws + 4] = self._ema_volume / init_val
-        obs[ws + 5] = self._ema_count / max(self.engine.config.retail_arrival_rate, 1.0)
-        obs[ws + 6] = self._ema_buy_ratio
+        # Observable execution stats (EMA, normalized)
+        obs[ws + 4] = self._ema_exec_volume / init_val
+        obs[ws + 5] = self._ema_exec_count / max(
+            self.engine.config.retail_arrival_rate, 1.0
+        )
+        obs[ws + 6] = self._ema_net_flow / init_val
 
         # Current fees
         obs[ws + 7] = amm.fees.bid_fee

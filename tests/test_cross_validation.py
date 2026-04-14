@@ -284,6 +284,9 @@ class TestStatisticalProperties:
             assert result.n_retail_orders == 0
             assert result.retail_volume_y["submission"] == 0.0
             assert result.retail_volume_y["normalizer"] == 0.0
+            assert result.execution_count["submission"] == 0
+            assert result.execution_volume_y["submission"] == 0.0
+            assert result.net_flow_y["submission"] == 0.0
 
 
 # ---------------------------------------------------------------------------

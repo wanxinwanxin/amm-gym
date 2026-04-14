@@ -47,6 +47,9 @@ class StepResult:
     n_retail_orders: int = 0
     retail_volume_y: dict[str, float] = field(default_factory=dict)
     arb_volume_y: dict[str, float] = field(default_factory=dict)
+    execution_count: dict[str, int] = field(default_factory=dict)
+    execution_volume_y: dict[str, float] = field(default_factory=dict)
+    net_flow_y: dict[str, float] = field(default_factory=dict)
 
 
 class SimulationEngine:
@@ -122,6 +125,9 @@ class SimulationEngine:
 
         step_arb_volume: dict[str, float] = {"submission": 0.0, "normalizer": 0.0}
         step_retail_volume: dict[str, float] = {"submission": 0.0, "normalizer": 0.0}
+        step_execution_count: dict[str, int] = {"submission": 0, "normalizer": 0}
+        step_execution_volume: dict[str, float] = {"submission": 0.0, "normalizer": 0.0}
+        step_net_flow_y: dict[str, float] = {"submission": 0.0, "normalizer": 0.0}
 
         # 2. Arbitrageur trades on each AMM
         for amm in [self.amm_agent, self.amm_norm]:
@@ -137,6 +143,12 @@ class SimulationEngine:
         )
         for trade in routed_trades:
             step_retail_volume[trade.amm_name] += trade.amount_y
+            step_execution_count[trade.amm_name] += 1
+            step_execution_volume[trade.amm_name] += trade.amount_y
+            if trade.amm_buys_x:
+                step_net_flow_y[trade.amm_name] -= trade.amount_y
+            else:
+                step_net_flow_y[trade.amm_name] += trade.amount_y
             if trade.amm_buys_x:
                 trade_edge = trade.amount_x * fair_price - trade.amount_y
             else:
@@ -166,6 +178,9 @@ class SimulationEngine:
             n_retail_orders=len(orders),
             retail_volume_y=step_retail_volume,
             arb_volume_y=step_arb_volume,
+            execution_count=step_execution_count,
+            execution_volume_y=step_execution_volume,
+            net_flow_y=step_net_flow_y,
         )
 
         self.current_step += 1
