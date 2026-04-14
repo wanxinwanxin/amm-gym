@@ -1,6 +1,6 @@
 # amm-gym
 
-Start with [`docs/project_plan.md`](/Users/xinwan/Github/amm-gym/docs/project_plan.md).
+Start with [`docs/project_plan.md`](docs/project_plan.md).
 
 Active implementation branches:
 - `env-realism`
