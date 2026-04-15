@@ -1,60 +1,84 @@
-"""Baseline fee policies for benchmarking."""
+"""Baseline depth-ladder policies for benchmarking."""
 
 from __future__ import annotations
 
 import numpy as np
 
 
-class StaticFeePolicy:
-    """Always returns the same bid/ask fee."""
-
-    def __init__(self, fee_bps: float) -> None:
-        self.fee = fee_bps / 10_000.0
-
-    def __call__(self, obs: np.ndarray) -> np.ndarray:
-        return np.array([self.fee, self.fee], dtype=np.float32)
-
-
-class DecayHeuristic:
-    """Widen fees after large trades, decay toward base fee.
-
-    After each step, if recent volume is above average, increase fees.
-    Otherwise decay toward base_fee_bps.
-    """
+class StaticDepthPolicy:
+    """Always returns the same 6D ladder control."""
 
     def __init__(
         self,
-        base_fee_bps: float = 30.0,
-        max_fee_bps: float = 100.0,
-        widen_factor: float = 1.5,
-        decay_rate: float = 0.95,
+        bid_scale: float = 0.0,
+        ask_scale: float = 0.0,
+        bid_decay: float = 0.0,
+        ask_decay: float = 0.0,
+        bid_tilt: float = 0.0,
+        ask_tilt: float = 0.0,
     ) -> None:
-        self.base_fee = base_fee_bps / 10_000.0
-        self.max_fee = max_fee_bps / 10_000.0
-        self.widen_factor = widen_factor
-        self.decay_rate = decay_rate
-        self.current_fee = self.base_fee
+        self.action = np.array(
+            [bid_scale, bid_decay, bid_tilt, ask_scale, ask_decay, ask_tilt],
+            dtype=np.float32,
+        )
 
     def __call__(self, obs: np.ndarray) -> np.ndarray:
-        # obs[ws+4] is EMA of recent retail volume (normalized)
-        # obs[ws+5] is EMA of recent trade count (normalized)
-        # Use trade count as proxy for "high activity"
-        # Default window_size=10, so index 14+5=15 is count
-        # We just use a simple heuristic based on the normalized count
-        ws = len(obs) - 11  # infer window_size
-        ema_count_norm = obs[ws + 5] if len(obs) > ws + 5 else 0.5
+        return self.action.copy()
 
-        if ema_count_norm > 1.0:
-            # Above average activity -> widen
-            self.current_fee = min(
-                self.current_fee * self.widen_factor, self.max_fee
-            )
-        else:
-            # Decay toward base
-            self.current_fee = (
-                self.decay_rate * self.current_fee
-                + (1 - self.decay_rate) * self.base_fee
-            )
 
-        fee = float(np.clip(self.current_fee, 0.0001, 0.10))
-        return np.array([fee, fee], dtype=np.float32)
+class InventoryAwareDepthPolicy:
+    """Simple heuristic that skews depth away from the heavier inventory side."""
+
+    def __init__(self, base_scale: float = 0.0, base_decay: float = 0.0) -> None:
+        self.base_scale = float(base_scale)
+        self.base_decay = float(base_decay)
+
+    def __call__(self, obs: np.ndarray) -> np.ndarray:
+        ws = len(obs) - 15
+        imbalance = float(obs[ws + 2]) if len(obs) > ws + 2 else 0.0
+        bid_scale = np.clip(self.base_scale - imbalance, -1.0, 1.0)
+        ask_scale = np.clip(self.base_scale + imbalance, -1.0, 1.0)
+        bid_tilt = np.clip(-0.5 * imbalance, -1.0, 1.0)
+        ask_tilt = np.clip(0.5 * imbalance, -1.0, 1.0)
+        return np.array(
+            [
+                bid_scale,
+                self.base_decay,
+                bid_tilt,
+                ask_scale,
+                self.base_decay,
+                ask_tilt,
+            ],
+            dtype=np.float32,
+        )
+
+
+def benchmark_depth_policies() -> dict[str, StaticDepthPolicy]:
+    """Small hand-authored policy set for builder-facing benchmarks."""
+    return {
+        "balanced": StaticDepthPolicy(),
+        "aggressive_near_mid": StaticDepthPolicy(
+            bid_scale=0.6,
+            ask_scale=0.6,
+            bid_decay=0.7,
+            ask_decay=0.7,
+            bid_tilt=0.2,
+            ask_tilt=0.2,
+        ),
+        "defensive_tail_thin": StaticDepthPolicy(
+            bid_scale=-0.2,
+            ask_scale=-0.2,
+            bid_decay=1.0,
+            ask_decay=1.0,
+            bid_tilt=-0.2,
+            ask_tilt=-0.2,
+        ),
+        "inventory_long_bias": StaticDepthPolicy(
+            bid_scale=-0.5,
+            ask_scale=0.5,
+            bid_decay=0.2,
+            ask_decay=0.4,
+            bid_tilt=-0.3,
+            ask_tilt=0.3,
+        ),
+    }

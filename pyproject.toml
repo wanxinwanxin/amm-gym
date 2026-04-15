@@ -1,7 +1,7 @@
 [project]
 name = "amm-gym"
 version = "0.1.0"
-description = "Gymnasium environment for RL-based AMM fee setting"
+description = "Gymnasium environment for RL-based AMM liquidity placement"
 requires-python = ">=3.9"
 dependencies = [
     "gymnasium>=0.29",
@@ -12,6 +12,9 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov",
+]
+demo = [
+    "matplotlib>=3.8",
 ]
 rl = [
     "torch>=2.0",

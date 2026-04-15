@@ -30,12 +30,18 @@ class GBMPriceProcess:
         self.mu = mu
         self.sigma = sigma
         self.dt = dt
-        self.drift_term = (mu - 0.5 * sigma * sigma) * dt
-        self.vol_term = sigma * math.sqrt(dt)
+        self._set_sigma(sigma)
         self.rng = np.random.default_rng(seed)
 
-    def step(self) -> float:
+    def _set_sigma(self, sigma: float) -> None:
+        self.sigma = float(sigma)
+        self.drift_term = (self.mu - 0.5 * self.sigma * self.sigma) * self.dt
+        self.vol_term = self.sigma * math.sqrt(self.dt)
+
+    def step(self, sigma: float | None = None) -> float:
         """Generate next price and return it."""
+        if sigma is not None and sigma != self.sigma:
+            self._set_sigma(sigma)
         z = self.rng.standard_normal()
         exponent = self.drift_term + self.vol_term * z
         self.current_price *= math.exp(exponent)

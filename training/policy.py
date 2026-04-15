@@ -10,12 +10,13 @@ import numpy as np
 @dataclass
 class LinearPolicySpec:
     obs_dim: int
+    action_dim: int
     action_low: np.ndarray
     action_high: np.ndarray
 
     @property
     def param_dim(self) -> int:
-        return 2 * self.obs_dim + 2
+        return self.action_dim * self.obs_dim + self.action_dim
 
 
 class LinearTanhPolicy:
@@ -31,8 +32,8 @@ class LinearTanhPolicy:
                 f"expected params shape {(spec.param_dim,)}, got {params.shape}"
             )
         self.spec = spec
-        split = 2 * spec.obs_dim
-        self.weights = params[:split].reshape(2, spec.obs_dim)
+        split = spec.action_dim * spec.obs_dim
+        self.weights = params[:split].reshape(spec.action_dim, spec.obs_dim)
         self.bias = params[split:]
 
     def act(self, obs: np.ndarray) -> np.ndarray:
@@ -42,4 +43,3 @@ class LinearTanhPolicy:
         high = self.spec.action_high
         action = low + 0.5 * (squashed + 1.0) * (high - low)
         return np.clip(action, low, high).astype(np.float32)
-

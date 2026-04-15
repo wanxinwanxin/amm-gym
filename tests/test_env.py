@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from amm_gym.env import AMMFeeEnv, MIN_FEE, MAX_FEE
+from amm_gym.env import ACTION_DIM, ACTION_MAX, ACTION_MIN, AMMFeeEnv
+from amm_gym.baselines import StaticDepthPolicy
 from amm_gym.sim.engine import SimConfig
-from amm_gym.baselines import StaticFeePolicy
 
 
 @pytest.fixture
@@ -14,8 +14,6 @@ def short_config():
 
 
 class TestEnvAPI:
-    """Verify Gymnasium API compliance."""
-
     def test_reset_returns_obs_and_info(self, short_config):
         env = AMMFeeEnv(config=short_config)
         obs, info = env.reset(seed=42)
@@ -23,126 +21,66 @@ class TestEnvAPI:
         assert obs.dtype == np.float32
         assert "edge" in info
 
+    def test_action_space_is_six_dimensional(self, short_config):
+        env = AMMFeeEnv(config=short_config)
+        assert env.action_space.shape == (ACTION_DIM,)
+        np.testing.assert_array_equal(env.action_space.low, np.full(ACTION_DIM, ACTION_MIN))
+        np.testing.assert_array_equal(env.action_space.high, np.full(ACTION_DIM, ACTION_MAX))
+
     def test_step_returns_correct_tuple(self, short_config):
         env = AMMFeeEnv(config=short_config)
         env.reset(seed=42)
-        action = np.array([0.003, 0.003], dtype=np.float32)
+        action = np.zeros(ACTION_DIM, dtype=np.float32)
         obs, reward, terminated, truncated, info = env.step(action)
         assert obs.shape == env.observation_space.shape
         assert isinstance(reward, float)
         assert isinstance(terminated, bool)
         assert isinstance(truncated, bool)
         assert "edge" in info
+        assert "ask_near_depth_y" in info
 
-    def test_episode_terminates(self, short_config):
+    def test_action_clipping_is_reflected_in_observation(self, short_config):
         env = AMMFeeEnv(config=short_config)
-        env.reset(seed=42)
-        action = np.array([0.003, 0.003], dtype=np.float32)
-        for i in range(100):
-            obs, reward, terminated, truncated, info = env.step(action)
-            if i < 99:
-                assert not terminated
-        assert terminated
-
-    def test_action_clipping(self, short_config):
-        env = AMMFeeEnv(config=short_config)
-        env.reset(seed=42)
-        # Action outside bounds should be clipped, not crash
-        action = np.array([-1.0, 2.0], dtype=np.float32)
-        obs, reward, terminated, truncated, info = env.step(action)
-        assert info["bid_fee"] == pytest.approx(MIN_FEE)
-        assert info["ask_fee"] == pytest.approx(MAX_FEE)
+        obs, _ = env.reset(seed=42)
+        action = np.array([2.0, -2.0, 1.5, -1.5, 2.0, -2.0], dtype=np.float32)
+        obs, _, _, _, _ = env.step(action)
+        ws = env.window_size
+        expected = np.clip(action, ACTION_MIN, ACTION_MAX)
+        np.testing.assert_allclose(obs[ws + 7 : ws + 13], expected)
 
     def test_deterministic_with_seed(self, short_config):
         env = AMMFeeEnv(config=short_config)
-        action = np.array([0.003, 0.003], dtype=np.float32)
+        action = np.zeros(ACTION_DIM, dtype=np.float32)
 
         env.reset(seed=42)
-        rewards_a = []
-        for _ in range(50):
-            _, r, _, _, _ = env.step(action)
-            rewards_a.append(r)
+        rewards_a = [env.step(action)[1] for _ in range(50)]
 
         env.reset(seed=42)
-        rewards_b = []
-        for _ in range(50):
-            _, r, _, _, _ = env.step(action)
-            rewards_b.append(r)
+        rewards_b = [env.step(action)[1] for _ in range(50)]
 
         np.testing.assert_array_equal(rewards_a, rewards_b)
 
     def test_reset_without_seed_produces_fresh_episode(self, short_config):
         env = AMMFeeEnv(config=short_config)
-        action = np.array([0.003, 0.003], dtype=np.float32)
+        action = np.zeros(ACTION_DIM, dtype=np.float32)
 
         env.reset(seed=42)
-        rewards_seeded = []
-        for _ in range(10):
-            _, reward, _, _, _ = env.step(action)
-            rewards_seeded.append(reward)
+        rewards_seeded = [env.step(action)[1] for _ in range(10)]
 
         env.reset()
-        rewards_unseeded = []
-        for _ in range(10):
-            _, reward, _, _, _ = env.step(action)
-            rewards_unseeded.append(reward)
+        rewards_unseeded = [env.step(action)[1] for _ in range(10)]
 
         assert rewards_unseeded != rewards_seeded
 
 
 class TestEnvBehavior:
-    """Verify economic behavior makes sense."""
-
-    def test_static_30bps_near_zero_edge(self):
-        """With both AMMs at 30bps, agent edge should be ~0 (symmetric)."""
-        config = SimConfig(n_steps=5000, seed=42)
-        env = AMMFeeEnv(config=config)
-        env.reset(seed=42)
-
-        policy = StaticFeePolicy(30)
-        total_reward = 0.0
-        obs = env.reset(seed=42)[0]
-        for _ in range(5000):
-            action = policy(obs)
-            obs, reward, terminated, truncated, info = env.step(action)
-            total_reward += reward
-
-        # Both AMMs have same fees -> should split flow evenly -> ~0 edge difference
-        # Allow some noise since retail flow is stochastic
-        assert abs(info["edge"]) < abs(info["edge_normalizer"]) * 5 + 50
-
-    def test_very_low_fees_attract_more_retail(self):
-        """Very low fees should attract more retail but lose more to arb."""
-        config = SimConfig(n_steps=2000, seed=42)
-
-        # Run with 5 bps
-        env = AMMFeeEnv(config=config)
-        obs, _ = env.reset(seed=42)
-        low_fee_policy = StaticFeePolicy(5)
-        for _ in range(2000):
-            obs, _, _, _, info_low = env.step(low_fee_policy(obs))
-
-        # Run with 100 bps
-        env2 = AMMFeeEnv(config=config)
-        obs, _ = env2.reset(seed=42)
-        high_fee_policy = StaticFeePolicy(100)
-        for _ in range(2000):
-            obs, _, _, _, info_high = env2.step(high_fee_policy(obs))
-
-        # Low fees should capture more retail flow to agent AMM
-        # but the edge comparison depends on arb losses too
-        # Just check both ran without error and produced different results
-        assert info_low["edge"] != info_high["edge"]
-
     def test_reward_sums_to_final_edge(self):
-        """Sum of rewards should equal final edge."""
-        config = SimConfig(n_steps=500, seed=42)
-        env = AMMFeeEnv(config=config)
+        env = AMMFeeEnv(config=SimConfig(n_steps=300, seed=42))
         env.reset(seed=42)
 
         total_reward = 0.0
-        action = np.array([0.003, 0.003], dtype=np.float32)
-        for _ in range(500):
+        action = np.zeros(ACTION_DIM, dtype=np.float32)
+        for _ in range(300):
             _, reward, _, _, info = env.step(action)
             total_reward += reward
 
@@ -152,9 +90,70 @@ class TestEnvBehavior:
         config = SimConfig(n_steps=20, retail_arrival_rate=0.0, seed=42)
         env = AMMFeeEnv(config=config)
         env.reset(seed=42)
-
-        action = np.array([0.003, 0.003], dtype=np.float32)
+        action = np.zeros(ACTION_DIM, dtype=np.float32)
         for _ in range(20):
             _, _, _, _, _ = env.step(action)
-            assert env._ema_count == 0.0
-            assert env._ema_volume == 0.0
+            assert env._ema_exec_count == 0.0
+            assert env._ema_exec_volume == 0.0
+
+    def test_more_aggressive_depth_policy_changes_outcomes(self):
+        config = SimConfig(n_steps=500, seed=42)
+
+        env = AMMFeeEnv(config=config)
+        obs, _ = env.reset(seed=42)
+        conservative = StaticDepthPolicy(
+            bid_scale=-0.6, ask_scale=-0.6, bid_decay=0.6, ask_decay=0.6
+        )
+        for _ in range(500):
+            obs, _, _, _, info_cons = env.step(conservative(obs))
+
+        env2 = AMMFeeEnv(config=config)
+        obs, _ = env2.reset(seed=42)
+        aggressive = StaticDepthPolicy(
+            bid_scale=0.6, ask_scale=0.6, bid_decay=-0.3, ask_decay=-0.3
+        )
+        for _ in range(500):
+            obs, _, _, _, info_aggr = env2.step(aggressive(obs))
+
+        assert info_cons["execution_volume_y"] != info_aggr["execution_volume_y"]
+
+    def test_current_true_price_is_not_exposed_in_info(self):
+        env = AMMFeeEnv(config=SimConfig(n_steps=10, seed=42))
+        env.reset(seed=42)
+        _, _, _, _, info = env.step(np.zeros(ACTION_DIM, dtype=np.float32))
+        assert "fair_price" not in info
+
+    def test_current_sigma_is_not_exposed_in_info(self):
+        env = AMMFeeEnv(
+            config=SimConfig(
+                n_steps=10,
+                seed=42,
+                volatility_schedule=((0, 0.001), (5, 0.004)),
+            )
+        )
+        env.reset(seed=42)
+        _, _, _, _, info = env.step(np.zeros(ACTION_DIM, dtype=np.float32))
+        assert "active_sigma" not in info
+
+    def test_volatility_schedule_is_seed_reproducible(self):
+        config = SimConfig(
+            n_steps=40,
+            volatility_schedule=((0, 0.001), (20, 0.004)),
+        )
+        env_a = AMMFeeEnv(config=config)
+        env_b = AMMFeeEnv(config=config)
+
+        obs_a, _ = env_a.reset(seed=11)
+        obs_b, _ = env_b.reset(seed=11)
+        np.testing.assert_allclose(obs_a, obs_b)
+
+        rewards_a = []
+        rewards_b = []
+        action = np.zeros(ACTION_DIM, dtype=np.float32)
+        for _ in range(40):
+            _, reward_a, _, _, _ = env_a.step(action)
+            _, reward_b, _, _, _ = env_b.step(action)
+            rewards_a.append(reward_a)
+            rewards_b.append(reward_b)
+
+        np.testing.assert_allclose(rewards_a, rewards_b)

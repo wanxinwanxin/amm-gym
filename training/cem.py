@@ -41,6 +41,7 @@ class CEMTrainer:
         obs, _ = env.reset(seed=config.seed)
         self.spec = LinearPolicySpec(
             obs_dim=obs.shape[0],
+            action_dim=int(np.asarray(env.action_space.low).shape[0]),
             action_low=np.asarray(env.action_space.low, dtype=np.float32),
             action_high=np.asarray(env.action_space.high, dtype=np.float32),
         )
@@ -114,4 +115,3 @@ class CEMTrainer:
             episode_rewards.append(total_reward)
 
         return float(np.mean(episode_rewards))
-

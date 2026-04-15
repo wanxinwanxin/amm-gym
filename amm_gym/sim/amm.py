@@ -190,3 +190,29 @@ class ConstantProductAMM:
         self.reserve_y = reserve_y
         self.accumulated_fees_x = 0.0
         self.accumulated_fees_y = 0.0
+
+    def marginal_ask_price_after_y(self, amount_y: float) -> float:
+        """Marginal ask price (Y per X) after paying `amount_y` of Y."""
+        fee = self.fees.ask_fee
+        gamma = max(0.0, min(1.0, 1.0 - fee))
+        if gamma <= 0.0:
+            return math.inf
+
+        net_y = max(0.0, amount_y) * gamma
+        new_ry = self.reserve_y + net_y
+        new_rx = self.k / new_ry if new_ry > 0.0 else 0.0
+        if new_rx <= 0.0:
+            return math.inf
+        return (new_ry / new_rx) / gamma
+
+    def marginal_bid_price_after_x(self, amount_x: float) -> float:
+        """Marginal bid payout price (Y per X) after selling `amount_x` of X."""
+        fee = self.fees.bid_fee
+        gamma = max(0.0, min(1.0, 1.0 - fee))
+        if gamma <= 0.0:
+            return 0.0
+
+        net_x = max(0.0, amount_x) * gamma
+        new_rx = self.reserve_x + net_x
+        new_ry = self.k / new_rx if new_rx > 0.0 else 0.0
+        return gamma * (new_ry / new_rx) if new_rx > 0.0 else 0.0

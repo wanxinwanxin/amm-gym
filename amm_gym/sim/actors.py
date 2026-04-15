@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from amm_gym.sim.amm import ConstantProductAMM, TradeResult
+from amm_gym.sim.ladder import DepthLadderAMM
 
 
 # ---------------------------------------------------------------------------
@@ -34,14 +35,101 @@ class Arbitrageur:
     """
 
     def execute_arb(
-        self, amm: ConstantProductAMM, fair_price: float, timestamp: int
+        self, amm: ConstantProductAMM | DepthLadderAMM, fair_price: float, timestamp: int
     ) -> ArbResult | None:
+        if isinstance(amm, DepthLadderAMM):
+            return self._execute_ladder_arb(amm, fair_price, timestamp)
         spot = amm.spot_price
         if spot < fair_price:
             return self._buy_arb(amm, fair_price, timestamp)
         elif spot > fair_price:
             return self._sell_arb(amm, fair_price, timestamp)
         return None
+
+    def _execute_ladder_arb(
+        self, amm: DepthLadderAMM, fair_price: float, timestamp: int
+    ) -> ArbResult | None:
+        best_ask = amm.best_ask_price
+        if fair_price > best_ask:
+            max_y = amm.total_remaining_ask_y()
+            if max_y <= 0.0:
+                return None
+            end_price = amm.marginal_ask_price_after_y(max_y)
+            if fair_price >= end_price:
+                amount_y = max_y
+            else:
+                amount_y = self._bisect_increasing(
+                    lambda y: amm.marginal_ask_price_after_y(y),
+                    target=fair_price,
+                    low=0.0,
+                    high=max_y,
+                )
+            trade = amm.execute_buy_x_with_y(amount_y, timestamp)
+            if trade is None:
+                return None
+            profit = trade.amount_x * fair_price - amount_y
+            if profit <= 0.0:
+                return None
+            return ArbResult(
+                amm_name=amm.name,
+                profit=profit,
+                side="sell",
+                amount_x=trade.amount_x,
+                amount_y=amount_y,
+            )
+
+        best_bid = amm.best_bid_price
+        if fair_price < best_bid:
+            max_x = amm.total_remaining_bid_x()
+            if max_x <= 0.0:
+                return None
+            end_price = amm.marginal_bid_price_after_x(max_x)
+            if fair_price <= end_price:
+                amount_x = max_x
+            else:
+                amount_x = self._bisect_decreasing(
+                    lambda x: amm.marginal_bid_price_after_x(x),
+                    target=fair_price,
+                    low=0.0,
+                    high=max_x,
+                )
+            trade = amm.execute_buy_x(amount_x, timestamp)
+            if trade is None:
+                return None
+            profit = trade.amount_y - trade.amount_x * fair_price
+            if profit <= 0.0:
+                return None
+            return ArbResult(
+                amm_name=amm.name,
+                profit=profit,
+                side="buy",
+                amount_x=amount_x,
+                amount_y=trade.amount_y,
+            )
+
+        return None
+
+    def _bisect_increasing(self, fn, target: float, low: float, high: float) -> float:
+        lo = low
+        hi = high
+        for _ in range(50):
+            mid = 0.5 * (lo + hi)
+            if fn(mid) < target:
+                lo = mid
+            else:
+                hi = mid
+        return 0.5 * (lo + hi)
+
+    def _bisect_decreasing(self, fn, target: float, low: float, high: float) -> float:
+        lo = low
+        hi = high
+        for _ in range(50):
+            mid = 0.5 * (lo + hi)
+            if fn(mid) > target:
+                lo = mid
+            else:
+                hi = mid
+        return 0.5 * (lo + hi)
 
     def _buy_arb(
         self, amm: ConstantProductAMM, fair_price: float, timestamp: int
@@ -278,7 +366,7 @@ class OrderRouter:
     def route_order(
         self,
         order: RetailOrder,
-        amm_agent: ConstantProductAMM,
+        amm_agent: ConstantProductAMM | DepthLadderAMM,
         amm_norm: ConstantProductAMM,
         fair_price: float,
         timestamp: int,
@@ -288,7 +376,10 @@ class OrderRouter:
 
         if order.side == "buy":
             # Trader wants to buy X, spending Y
-            y1, y2 = self.split_buy_two_amms(amm_agent, amm_norm, order.size)
+            if isinstance(amm_agent, ConstantProductAMM):
+                y1, y2 = self.split_buy_two_amms(amm_agent, amm_norm, order.size)
+            else:
+                y1, y2 = self.solve_buy_split(amm_agent, amm_norm, order.size)
 
             if y1 > MIN_AMOUNT:
                 result = amm_agent.execute_buy_x_with_y(y1, timestamp)
@@ -312,7 +403,10 @@ class OrderRouter:
         else:
             # Trader wants to sell X, receiving Y
             total_x = order.size / fair_price
-            x1, x2 = self.split_sell_two_amms(amm_agent, amm_norm, total_x)
+            if isinstance(amm_agent, ConstantProductAMM):
+                x1, x2 = self.split_sell_two_amms(amm_agent, amm_norm, total_x)
+            else:
+                x1, x2 = self.solve_sell_split(amm_agent, amm_norm, total_x)
 
             if x1 > MIN_AMOUNT:
                 result = amm_agent.execute_buy_x(x1, timestamp)
@@ -339,7 +433,7 @@ class OrderRouter:
     def route_orders(
         self,
         orders: list[RetailOrder],
-        amm_agent: ConstantProductAMM,
+        amm_agent: ConstantProductAMM | DepthLadderAMM,
         amm_norm: ConstantProductAMM,
         fair_price: float,
         timestamp: int,
@@ -350,3 +444,63 @@ class OrderRouter:
                 self.route_order(order, amm_agent, amm_norm, fair_price, timestamp)
             )
         return all_trades
+
+    def solve_buy_split(
+        self,
+        amm_agent: DepthLadderAMM,
+        amm_norm: ConstantProductAMM,
+        total_y: float,
+    ) -> tuple[float, float]:
+        def diff(amount_y_agent: float) -> float:
+            return (
+                amm_agent.marginal_ask_price_after_y(amount_y_agent)
+                - amm_norm.marginal_ask_price_after_y(total_y - amount_y_agent)
+            )
+
+        g0 = diff(0.0)
+        g1 = diff(total_y)
+        if g0 >= 0.0:
+            return (0.0, total_y)
+        if g1 <= 0.0:
+            return (total_y, 0.0)
+
+        lo = 0.0
+        hi = total_y
+        for _ in range(50):
+            mid = 0.5 * (lo + hi)
+            if diff(mid) < 0.0:
+                lo = mid
+            else:
+                hi = mid
+        agent_y = 0.5 * (lo + hi)
+        return (agent_y, total_y - agent_y)
+
+    def solve_sell_split(
+        self,
+        amm_agent: DepthLadderAMM,
+        amm_norm: ConstantProductAMM,
+        total_x: float,
+    ) -> tuple[float, float]:
+        def diff(amount_x_agent: float) -> float:
+            return (
+                amm_agent.marginal_bid_price_after_x(amount_x_agent)
+                - amm_norm.marginal_bid_price_after_x(total_x - amount_x_agent)
+            )
+
+        g0 = diff(0.0)
+        g1 = diff(total_x)
+        if g0 <= 0.0:
+            return (0.0, total_x)
+        if g1 >= 0.0:
+            return (total_x, 0.0)
+
+        lo = 0.0
+        hi = total_x
+        for _ in range(50):
+            mid = 0.5 * (lo + hi)
+            if diff(mid) > 0.0:
+                lo = mid
+            else:
+                hi = mid
+        agent_x = 0.5 * (lo + hi)
+        return (agent_x, total_x - agent_x)
