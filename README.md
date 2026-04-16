@@ -1,27 +1,38 @@
 # amm-gym
 
-`amm-gym` is a Gymnasium environment for AMM market-making research with a fixed
-`30 bps` constant-product normalizer and a ladder-based submission venue that
-posts depth across price-impact bands.
+`amm-gym` is a Gymnasium-compatible environment for AMM market-making research.
+It models a learnable submission venue competing with a fixed-fee normalizer
+AMM for retail flow while both venues are exposed to arbitrage.
 
 ## What It Simulates
 
-- A submission venue that chooses a 6D depth-control action each step
-- A fixed `30 bps` normalizer AMM competing for the same retail flow
+- A submission venue controlled by a `6D` ladder action each step
+- A fixed `30 bps` constant-product normalizer competing for the same retail flow
+- Retail routing across venues
 - Arbitrage against both venues
-- Hidden fair-price dynamics with configurable within-episode volatility shifts
-- Lagged, non-leaky observations intended for RL and policy benchmarking
+- Hidden fair-price dynamics with optional within-episode volatility regimes
+- Lagged observations designed for RL and policy benchmarking
+
+## Start Here
+
+- Setup and first run: [docs/getting_started.md](docs/getting_started.md)
+- Train a baseline policy: [docs/training_quickstart.md](docs/training_quickstart.md)
+- Generate demo visuals and animation: [docs/demo_guide.md](docs/demo_guide.md)
+- Trainer-facing env API: [docs/env_training_contract.md](docs/env_training_contract.md)
 
 ## Install
 
 ```bash
 python -m pip install -e .
-python -m pip install -e .[demo]
+python -m pip install -e .[demo,dev]
 ```
 
-The `demo` extra is only needed for plot output.
+Use:
+- base install for the environment package only
+- `demo` for plots and animation output
+- `dev` for tests
 
-## Quickstart
+## Minimal Env Loop
 
 ```python
 import numpy as np
@@ -31,17 +42,42 @@ from amm_gym.sim.engine import SimConfig
 
 env = AMMFeeEnv(config=SimConfig(n_steps=20))
 obs, info = env.reset(seed=7)
-action = np.zeros(6, dtype=np.float32)
 
-for _ in range(20):
+while True:
+    action = np.zeros(6, dtype=np.float32)
     obs, reward, terminated, truncated, info = env.step(action)
     if terminated or truncated:
         break
 ```
 
-## Public Contract
+## Training In One Command
 
-The trainer-facing source of truth is [`docs/env_training_contract.md`](docs/env_training_contract.md).
+The repo includes a default CEM baseline trainer with a canonical demo config:
+
+```bash
+python training/run_baseline.py
+```
+
+Optional outputs:
+
+```bash
+python training/run_baseline.py \
+  --plot demo/artifacts/training_curve.png \
+  --comparison-plot demo/artifacts/trained_vs_baseline.png \
+  --output demo/artifacts/baseline_run.npz
+```
+
+## Demo Artifacts
+
+Generate the main demo visuals:
+
+```bash
+python -m demo.depth_ladder_demo --plot demo/artifacts/mechanism.png
+python -m demo.strategy_flexibility_demo --output demo/artifacts/strategy_flexibility.png
+python -m demo.episode_animation --output demo/artifacts/trained_episode.gif
+```
+
+## Core Interface
 
 Current action semantics:
 - `action[0]`: bid scale
@@ -52,28 +88,11 @@ Current action semantics:
 - `action[5]`: ask tilt
 
 The observation is lagged by one step for price-derived information. The policy
-does not receive the current hidden fair price or trader-type labels directly.
+does not receive the current hidden fair price or the current active volatility
+regime directly.
 
-## Run The Benchmark
-
-Compare hand-authored ladder policies across constant and regime-shift volatility:
-
-```bash
-python demo/run_policy_benchmark.py --steps 120 --seeds 5
-```
-
-## Run The Demo
-
-Run one short episode and optionally save plots:
-
-```bash
-python demo/depth_ladder_demo.py --policy aggressive_near_mid --schedule regime_shift
-python demo/depth_ladder_demo.py --policy aggressive_near_mid --schedule regime_shift --plot demo/episode.png
-```
-
-## Builder Notes
+## Notes
 
 - The submission venue uses fixed internal bands at `2, 4, 8, 16, 32, 64, 128` bps.
 - The normalizer remains a fixed-fee constant-product benchmark.
-- Volatility regimes are configurable through `SimConfig.volatility_schedule`.
-- Training code should depend on `AMMFeeEnv` and `SimConfig`, not simulator internals.
+- Training code should treat `AMMFeeEnv` and `SimConfig` as the public surface.

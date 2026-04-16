@@ -10,20 +10,18 @@ import numpy as np
 
 from amm_gym import AMMFeeEnv
 from amm_gym.baselines import benchmark_depth_policies
-from amm_gym.sim.engine import SimConfig
-
-
-def named_schedules() -> dict[str, tuple[tuple[int, float], ...] | None]:
-    return {
-        "constant_low_vol": None,
-        "regime_shift": ((0, 0.001), (40, 0.0035), (80, 0.0015)),
-    }
+from demo.presets import (
+    DEFAULT_DEMO_STEPS,
+    DEFAULT_WINDOW_SIZE,
+    build_hackathon_demo_config,
+    named_schedules,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Benchmark hand-authored ladder policies")
-    parser.add_argument("--steps", type=int, default=120)
-    parser.add_argument("--window-size", type=int, default=10)
+    parser.add_argument("--steps", type=int, default=DEFAULT_DEMO_STEPS)
+    parser.add_argument("--window-size", type=int, default=DEFAULT_WINDOW_SIZE)
     parser.add_argument("--seeds", type=int, default=5)
     parser.add_argument("--output", type=Path, default=None)
     return parser
@@ -46,10 +44,10 @@ def evaluate_policy(
 
     for seed in range(seeds):
         env = AMMFeeEnv(
-            config=SimConfig(
-                n_steps=steps,
-                volatility_schedule=schedule,
+            config=build_hackathon_demo_config(
                 seed=seed,
+                steps=steps,
+                schedule=schedule,
             ),
             window_size=window_size,
         )

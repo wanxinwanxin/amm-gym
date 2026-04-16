@@ -89,9 +89,16 @@ Training and evaluation code may rely on these `info` keys:
 - `pnl`
 - `pnl_normalizer`
 - `spot_price`
+- `spot_price_normalizer`
 - `step`
 - `execution_count`
+- `execution_count_normalizer`
 - `execution_volume_y`
+- `execution_volume_y_normalizer`
+- `retail_volume_y`
+- `retail_volume_y_normalizer`
+- `arb_volume_y`
+- `arb_volume_y_normalizer`
 - `net_flow_y`
 - `ask_near_depth_y`
 - `ask_far_depth_y`
