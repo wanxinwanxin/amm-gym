@@ -158,10 +158,10 @@ $N_t \sim \mathrm{Poisson}(\lambda)$.
 
 For each order $j = 1, \ldots, N_t$:
 
-- size $Q_{t,j} \sim \mathrm{LogNormal}(\mu_{LN}, \sigma_{LN}^2)$
+- size $Q_{t,j} \sim \mathrm{LogNormal}(\mu_{\mathrm{LN}}, \sigma_{\mathrm{LN}}^2)$
 - side $B_{t,j} \sim \mathrm{Bernoulli}(p_{buy})$
 
-where $\mu_{LN}$ is chosen so that the lognormal has mean
+where $\mu_{\mathrm{LN}}$ is chosen so that the lognormal has mean
 `retail_mean_size`.
 
 If $B_{t,j} = 1$, the order is a buy with gross $Y$ size $Q_{t,j}$.
@@ -347,7 +347,6 @@ $$
 (\text{base\_fee}, \text{min\_fee}, \text{max\_fee}, \text{flow\_fast\_decay}, \text{flow\_slow\_decay}, \text{size\_fast\_decay}, \text{size\_slow\_decay}, \text{gap\_fast\_decay}, \text{gap\_slow\_decay}, \text{toxicity\_decay}, \text{toxicity\_weight}, \text{base\_spread}, \text{flow\_mid\_weight}, \text{size\_mid\_weight}, \text{gap\_mid\_weight}, \text{skew\_weight}, \text{toxicity\_side\_weight}, \text{hot\_gap\_threshold}, \text{big\_trade\_threshold}, \text{hot\_fee\_bump}).
 $$
 
-
 The policy keeps a state of exponentially decayed statistics:
 
 - fast and slow buy/sell flow
@@ -402,7 +401,7 @@ $\theta \sim \mathcal{N}\bigl(m_k,\, \operatorname{diag}(s_k^2)\bigr)$.
 
 At iteration $k$:
 
-1. sample a population ${\theta_i}$
+1. sample a population $\{\theta_i\}$
 2. score each candidate by mean episode objective over a set of seeds
 3. keep the top $\rho$ elite fraction
 4. set the next search mean and std to the elite sample mean and std
@@ -422,7 +421,7 @@ This is gradient-free.
 The PPO trainer does not optimize the compact diff policy directly. It trains a
 stochastic policy
 
-$\pi_\psi(a_t | o_t)$
+$\pi_\psi(a_t \mid o_t)$
 
 over the public Gym observation $o_t$ and action $a_t$.
 
@@ -474,7 +473,7 @@ The key idea is to keep the same overall simulator logic while replacing hard
 non-differentiabilities with smooth relaxations:
 
 - hard event activation -> sigmoid gates
-- $max(x, 0)$ -> smooth positive part
+- $\max(x, 0)$ -> smooth positive part
 - clipping -> smooth clip
 - branch combinations -> smooth gates / smooth OR
 - minimum trade threshold -> smooth trade amount
