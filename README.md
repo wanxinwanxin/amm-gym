@@ -1,13 +1,13 @@
 # amm-gym
 
 `amm-gym` is a Gymnasium-compatible environment for AMM market-making research.
-It models a learnable submission venue competing with a fixed-fee normalizer
-AMM for retail flow while both venues are exposed to arbitrage.
+It models a learnable submission venue competing with a benchmark venue for
+retail flow while both venues are exposed to arbitrage.
 
 ## What It Simulates
 
 - A submission venue controlled by a `6D` ladder action each step
-- A fixed `30 bps` constant-product normalizer competing for the same retail flow
+- A configurable benchmark venue, defaulting to a fixed `30 bps` constant-product AMM
 - Retail routing across venues
 - Arbitrage against both venues
 - Hidden fair-price dynamics with optional within-episode volatility regimes
@@ -55,16 +55,33 @@ while True:
 The repo includes a default CEM baseline trainer with a canonical demo config:
 
 ```bash
-python training/run_baseline.py
+python -m training.run_baseline
 ```
 
 Optional outputs:
 
 ```bash
-python training/run_baseline.py \
+python -m training.run_baseline \
+  --objective edge_advantage \
+  --summary-json demo/artifacts/baseline_summary.json \
   --plot demo/artifacts/training_curve.png \
   --comparison-plot demo/artifacts/trained_vs_baseline.png \
   --output demo/artifacts/baseline_run.npz
+```
+
+Research benchmark over heuristic policies:
+
+```bash
+python -m demo.run_policy_benchmark \
+  --scenario regime_shift \
+  --split test \
+  --output demo/artifacts/policy_benchmark.json
+```
+
+Compare first-pass research candidates:
+
+```bash
+python -m training.run_first_pass --output demo/artifacts/first_pass.json
 ```
 
 ## Demo Artifacts
@@ -94,5 +111,6 @@ regime directly.
 ## Notes
 
 - The submission venue uses fixed internal bands at `2, 4, 8, 16, 32, 64, 128` bps.
-- The normalizer remains a fixed-fee constant-product benchmark.
+- The default benchmark remains a fixed-fee constant-product AMM, but `SimConfig`
+  can now swap in a depth-ladder benchmark via `benchmark_venue=VenueSpec(...)`.
 - Training code should treat `AMMFeeEnv` and `SimConfig` as the public surface.
