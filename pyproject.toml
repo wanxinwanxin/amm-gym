@@ -19,13 +19,17 @@ demo = [
 rl = [
     "torch>=2.0",
 ]
+diff = [
+    "jax>=0.10.0",
+    "jaxlib>=0.10.0",
+]
 
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["amm_gym*"]
+include = ["amm_gym*", "arena_eval*", "arena_policies*", "arena_search*", "demo*", "training*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
