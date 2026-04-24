@@ -7,7 +7,7 @@ from typing import Callable
 
 import numpy as np
 
-from amm_gym import AMMFeeEnv
+from amm_gym import AMMChallengeEnv, AMMFeeEnv
 
 
 Policy = Callable[[np.ndarray], np.ndarray]
@@ -48,7 +48,7 @@ class RolloutTrace:
     total_reward: float
 
 
-def collect_rollout(env: AMMFeeEnv, policy: Policy, *, seed: int) -> RolloutTrace:
+def collect_rollout(env: AMMFeeEnv | AMMChallengeEnv, policy: Policy, *, seed: int) -> RolloutTrace:
     obs, _ = env.reset(seed=seed)
 
     trace = RolloutTrace(
@@ -111,18 +111,24 @@ def collect_rollout(env: AMMFeeEnv, policy: Policy, *, seed: int) -> RolloutTrac
         trace.arb_volumes.append(float(info["arb_volume_y"]))
         trace.normalizer_arb_volumes.append(float(info["arb_volume_y_normalizer"]))
         trace.net_flows.append(float(info["net_flow_y"]))
-        trace.ask_near.append(float(info["ask_near_depth_y"]))
-        trace.ask_far.append(float(info["ask_far_depth_y"]))
-        trace.bid_near.append(float(info["bid_near_depth_y"]))
-        trace.bid_far.append(float(info["bid_far_depth_y"]))
+        trace.ask_near.append(float(info.get("ask_near_depth_y", info.get("ask_spread_bps", 0.0))))
+        trace.ask_far.append(float(info.get("ask_far_depth_y", info.get("ask_capacity_x", 0.0))))
+        trace.bid_near.append(float(info.get("bid_near_depth_y", info.get("bid_spread_bps", 0.0))))
+        trace.bid_far.append(float(info.get("bid_far_depth_y", info.get("bid_capacity_x", 0.0))))
         trace.actions.append(action.copy())
         ladder = env.engine.amm_agent
-        centers_bps = 0.5 * (ladder._band_lower + ladder.band_rel) * 10_000.0
-        widths_bps = (ladder.band_rel - ladder._band_lower) * 10_000.0
-        trace.band_centers_bps = centers_bps.copy()
-        trace.band_widths_bps = widths_bps.copy()
-        trace.bid_band_depths.append((ladder.bid_depth_x * ladder.reference_price).copy())
-        trace.ask_band_depths.append(ladder.ask_depth_y.copy())
+        if hasattr(ladder, "_band_lower") and hasattr(ladder, "band_rel"):
+            centers_bps = 0.5 * (ladder._band_lower + ladder.band_rel) * 10_000.0
+            widths_bps = (ladder.band_rel - ladder._band_lower) * 10_000.0
+            trace.band_centers_bps = centers_bps.copy()
+            trace.band_widths_bps = widths_bps.copy()
+            trace.bid_band_depths.append((ladder.bid_depth_x * ladder.reference_price).copy())
+            trace.ask_band_depths.append(ladder.ask_depth_y.copy())
+        else:
+            trace.band_centers_bps = np.asarray([0.0, 1.0], dtype=np.float64)
+            trace.band_widths_bps = np.asarray([1.0, 1.0], dtype=np.float64)
+            trace.bid_band_depths.append(np.asarray([info.get("bid_spread_bps", 0.0)], dtype=np.float64))
+            trace.ask_band_depths.append(np.asarray([info.get("ask_spread_bps", 0.0)], dtype=np.float64))
         trace.total_reward += float(reward)
         trace.final_info = dict(info)
 

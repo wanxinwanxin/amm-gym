@@ -14,20 +14,22 @@ python -m pip install -e .[demo,dev]
 Run the default baseline trainer:
 
 ```bash
-python training/run_baseline.py
+python -m training.run_baseline
 ```
 
 That command:
 
-- builds the canonical hackathon scenario
-- trains a small linear-tanh policy with CEM
-- evaluates the learned policy on a seeded rollout
-- prints a JSON summary including score history and final metrics
+- trains on a fixed research scenario
+- uses train seeds for search and validation seeds for model selection
+- reports held-out edge advantage versus the normalizer
+- prints a compact JSON summary to stdout
 
 ## Save Training Outputs
 
 ```bash
-python training/run_baseline.py \
+python -m training.run_baseline \
+  --objective edge_advantage \
+  --summary-json demo/artifacts/baseline_summary.json \
   --plot demo/artifacts/training_curve.png \
   --comparison-plot demo/artifacts/trained_vs_baseline.png \
   --output demo/artifacts/baseline_run.npz
@@ -38,6 +40,7 @@ Artifacts produced:
 - `training_curve.png`: reward by training iteration
 - `trained_vs_baseline.png`: one seeded comparison rollout
 - `baseline_run.npz`: learned parameter vector and best score
+- `baseline_summary.json`: validation/test summaries including edge advantage
 
 ## What A User Must Supply
 
@@ -69,13 +72,42 @@ and the shared demo preset in
 
 Default knobs you can override from the CLI:
 
-- `--steps`
+- `--scenario`
 - `--window-size`
 - `--population-size`
 - `--elite-frac`
 - `--iterations`
 - `--eval-episodes`
 - `--seed`
+- `--policy-family`
+- `--objective`
+- `--hidden-sizes`
+
+Useful research command:
+
+```bash
+python -m demo.run_policy_benchmark --scenario regime_shift --split test
+```
+
+Useful first-pass compare command:
+
+```bash
+python -m training.run_first_pass
+```
+
+That command trains a small grid over:
+
+- `linear` vs `mlp`
+- `edge_advantage` vs `balanced` objective
+
+and ranks them by validation `edge_advantage`.
+
+That benchmark compares hand-authored policies on:
+
+- edge advantage versus the normalizer
+- win rate versus the normalizer
+- PnL for both venues
+- retail and arbitrage share
 
 ## Minimal Custom Trainer Shape
 
