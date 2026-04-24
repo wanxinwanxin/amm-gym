@@ -8,6 +8,7 @@ import pytest
 from amm_gym.sim.amm import ConstantProductAMM
 from amm_gym.sim.actors import Arbitrageur, OrderRouter
 from amm_gym.sim.engine import SimConfig, SimulationEngine
+from amm_gym.sim.venues import VenueSpec
 
 
 class TestAMMFormulas:
@@ -157,3 +158,139 @@ class TestSimulationProperties:
         first_half = returns[:60]
         second_half = returns[60:]
         assert np.std(second_half) > np.std(first_half) * 2.0
+
+    def test_identical_cpmm_benchmark_matches_submission_metrics(self):
+        cpmm_spec = VenueSpec(
+            kind="cpmm",
+            name="submission_cpmm",
+            reserve_x=100.0,
+            reserve_y=10_000.0,
+            bid_fee=0.003,
+            ask_fee=0.003,
+            controllable=False,
+        )
+        benchmark_spec = VenueSpec(
+            kind="cpmm",
+            name="benchmark_cpmm",
+            reserve_x=100.0,
+            reserve_y=10_000.0,
+            bid_fee=0.003,
+            ask_fee=0.003,
+            controllable=False,
+        )
+        engine = SimulationEngine(
+            SimConfig(
+                n_steps=120,
+                seed=7,
+                submission_venue=cpmm_spec,
+                benchmark_venue=benchmark_spec,
+            )
+        )
+        while not engine.done:
+            result = engine.step()
+
+        assert result.edges["submission"] == pytest.approx(result.edges["benchmark"], rel=1e-9, abs=1e-9)
+        assert result.pnls["submission"] == pytest.approx(result.pnls["benchmark"], rel=1e-9, abs=1e-9)
+        assert result.retail_volume_y["submission"] == pytest.approx(
+            result.retail_volume_y["benchmark"], rel=1e-9, abs=1e-9
+        )
+        assert result.arb_volume_y["submission"] == pytest.approx(
+            result.arb_volume_y["benchmark"], rel=1e-9, abs=1e-9
+        )
+
+    def test_identical_ladder_benchmark_matches_submission_metrics(self):
+        action = (0.2, -0.1, 0.0, 0.2, -0.1, 0.0)
+        submission_spec = VenueSpec(
+            kind="depth_ladder",
+            name="submission",
+            reserve_x=100.0,
+            reserve_y=10_000.0,
+            band_bps=(2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0),
+            base_notional_y=1_000.0,
+            controllable=True,
+        )
+        benchmark_spec = VenueSpec(
+            kind="depth_ladder",
+            name="benchmark_ladder",
+            reserve_x=100.0,
+            reserve_y=10_000.0,
+            band_bps=(2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0),
+            base_notional_y=1_000.0,
+            controllable=False,
+            fixed_action=action,
+        )
+        engine = SimulationEngine(
+            SimConfig(
+                n_steps=80,
+                seed=11,
+                submission_venue=submission_spec,
+                benchmark_venue=benchmark_spec,
+            )
+        )
+        engine.set_agent_action(np.asarray(action, dtype=np.float32))
+        while not engine.done:
+            result = engine.step()
+            engine.set_agent_action(np.asarray(action, dtype=np.float32))
+
+        assert result.edges["submission"] == pytest.approx(result.edges["benchmark"], rel=1e-7, abs=1e-7)
+        assert result.pnls["submission"] == pytest.approx(result.pnls["benchmark"], rel=1e-7, abs=1e-7)
+        assert result.retail_volume_y["submission"] == pytest.approx(
+            result.retail_volume_y["benchmark"], rel=1e-7, abs=1e-7
+        )
+        assert result.arb_volume_y["submission"] == pytest.approx(
+            result.arb_volume_y["benchmark"], rel=1e-7, abs=1e-7
+        )
+
+    def test_identical_quote_surface_benchmark_matches_submission_metrics(self):
+        action = (
+            0.1,
+            -0.05,
+            -0.3,
+            -0.2,
+            0.2,
+            0.15,
+            0.0,
+            0.1,
+            -0.1,
+            0.05,
+            0.4,
+            -0.2,
+            0.0,
+            0.0,
+        )
+        submission_spec = VenueSpec(
+            kind="quote_surface",
+            name="submission",
+            reserve_x=100.0,
+            reserve_y=10_000.0,
+            controllable=True,
+        )
+        benchmark_spec = VenueSpec(
+            kind="quote_surface",
+            name="benchmark_surface",
+            reserve_x=100.0,
+            reserve_y=10_000.0,
+            controllable=False,
+            fixed_action=action,
+        )
+        engine = SimulationEngine(
+            SimConfig(
+                n_steps=80,
+                seed=19,
+                submission_venue=submission_spec,
+                benchmark_venue=benchmark_spec,
+            )
+        )
+        engine.set_agent_action(np.asarray(action, dtype=np.float32))
+        while not engine.done:
+            result = engine.step()
+            engine.set_agent_action(np.asarray(action, dtype=np.float32))
+
+        assert result.edges["submission"] == pytest.approx(result.edges["benchmark"], rel=1e-7, abs=1e-7)
+        assert result.pnls["submission"] == pytest.approx(result.pnls["benchmark"], rel=1e-7, abs=1e-7)
+        assert result.retail_volume_y["submission"] == pytest.approx(
+            result.retail_volume_y["benchmark"], rel=1e-7, abs=1e-7
+        )
+        assert result.arb_volume_y["submission"] == pytest.approx(
+            result.arb_volume_y["benchmark"], rel=1e-7, abs=1e-7
+        )

@@ -6,10 +6,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from amm_gym.sim.amm import ConstantProductAMM
 from amm_gym.sim.actors import Arbitrageur, OrderRouter, RetailTrader
 from amm_gym.sim.ladder import DepthLadderAMM
 from amm_gym.sim.price import GBMPriceProcess
+from amm_gym.sim.quote_surface import ParametricQuoteSurfaceAMM
+from amm_gym.sim.venues import VenueSpec, build_venue
 
 
 @dataclass
@@ -28,6 +29,8 @@ class SimConfig:
     submission_band_bps: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0)
     submission_base_notional_y: float = 1_000.0
     volatility_schedule: tuple[tuple[int, float], ...] | None = None
+    submission_venue: VenueSpec | None = None
+    benchmark_venue: VenueSpec | None = None
     seed: int | None = None
 
 
@@ -49,7 +52,7 @@ class StepResult:
 
 
 class SimulationEngine:
-    """Step-by-step AMM simulation with a ladder submission and CPMM normalizer."""
+    """Step-by-step AMM simulation with configurable submission and benchmark venues."""
 
     def __init__(self, config: SimConfig) -> None:
         self.config = config
@@ -79,30 +82,36 @@ class SimulationEngine:
         self.arbitrageur = Arbitrageur()
         self.router = OrderRouter()
 
-        self.amm_agent = DepthLadderAMM(
-            name="submission",
-            reserve_x=cfg.initial_x,
-            reserve_y=cfg.initial_y,
-            band_bps=cfg.submission_band_bps,
-            base_notional_y=cfg.submission_base_notional_y,
+        self.submission_spec = self._resolve_submission_spec(cfg)
+        self.benchmark_spec = self._resolve_benchmark_spec(cfg)
+        controllable_count = int(self.submission_spec.controllable) + int(
+            self.benchmark_spec.controllable
         )
-        self.amm_norm = ConstantProductAMM(
-            name="normalizer",
-            reserve_x=cfg.initial_x,
-            reserve_y=cfg.initial_y,
-            bid_fee=0.003,
-            ask_fee=0.003,
-        )
+        if controllable_count > 1:
+            raise ValueError("at most one venue may be controllable")
+
+        self.submission_amm = build_venue(self.submission_spec)
+        self.benchmark_amm = build_venue(self.benchmark_spec)
+        # Compatibility aliases retained for existing demo/training code.
+        self.amm_agent = self.submission_amm
+        self.amm_norm = self.benchmark_amm
 
         self.initial_fair_price = cfg.initial_price
         self.initial_reserves = {
-            "submission": (cfg.initial_x, cfg.initial_y),
-            "normalizer": (cfg.initial_x, cfg.initial_y),
+            "submission": (self.submission_spec.reserve_x, self.submission_spec.reserve_y),
+            "benchmark": (self.benchmark_spec.reserve_x, self.benchmark_spec.reserve_y),
+            "normalizer": (self.benchmark_spec.reserve_x, self.benchmark_spec.reserve_y),
+            self.submission_amm.name: (self.submission_spec.reserve_x, self.submission_spec.reserve_y),
+            self.benchmark_amm.name: (self.benchmark_spec.reserve_x, self.benchmark_spec.reserve_y),
         }
-        self.edges: dict[str, float] = {"submission": 0.0, "normalizer": 0.0}
+        self.edges: dict[str, float] = {"submission": 0.0, "benchmark": 0.0, "normalizer": 0.0}
         self.current_step = 0
         self.current_fair_price = cfg.initial_price
-        self._pending_agent_action = np.zeros(6, dtype=np.float32)
+        self._controllable_action_dim = max(
+            self.submission_spec.action_dim if self.submission_spec.controllable else 0,
+            self.benchmark_spec.action_dim if self.benchmark_spec.controllable else 0,
+        )
+        self._pending_agent_action = np.zeros(self._controllable_action_dim, dtype=np.float32)
 
     def reset(self, seed: int | None = None) -> None:
         self._reset_state(seed=seed)
@@ -113,50 +122,70 @@ class SimulationEngine:
     def step(self) -> StepResult:
         t = self.current_step
 
-        self.amm_agent.configure(
-            reference_price=self.current_fair_price,
-            bid_raw=self._pending_agent_action[:3],
-            ask_raw=self._pending_agent_action[3:],
-        )
+        self._configure_controllable_venues()
 
         active_sigma = self._sigma_for_step(t)
         fair_price = self.price_process.step(sigma=active_sigma)
 
-        step_arb_volume = {"submission": 0.0, "normalizer": 0.0}
-        step_retail_volume = {"submission": 0.0, "normalizer": 0.0}
-        step_execution_count = {"submission": 0, "normalizer": 0}
-        step_execution_volume = {"submission": 0.0, "normalizer": 0.0}
-        step_net_flow_y = {"submission": 0.0, "normalizer": 0.0}
+        step_arb_volume = {"submission": 0.0, "benchmark": 0.0, "normalizer": 0.0}
+        step_retail_volume = {"submission": 0.0, "benchmark": 0.0, "normalizer": 0.0}
+        step_execution_count = {"submission": 0, "benchmark": 0, "normalizer": 0}
+        step_execution_volume = {"submission": 0.0, "benchmark": 0.0, "normalizer": 0.0}
+        step_net_flow_y = {"submission": 0.0, "benchmark": 0.0, "normalizer": 0.0}
 
-        for amm in [self.amm_agent, self.amm_norm]:
+        for venue_key, amm in [("submission", self.submission_amm), ("benchmark", self.benchmark_amm)]:
             arb_result = self.arbitrageur.execute_arb(amm, fair_price, t)
             if arb_result is not None:
-                step_arb_volume[arb_result.amm_name] += arb_result.amount_y
-                self.edges[arb_result.amm_name] -= arb_result.profit
+                step_arb_volume[venue_key] += arb_result.amount_y
+                self.edges[venue_key] -= arb_result.profit
+                self._record_venue_trade(
+                    venue_key=venue_key,
+                    amount_y=arb_result.amount_y,
+                    signed_flow_y=-arb_result.amount_y if arb_result.side == "buy" else arb_result.amount_y,
+                    is_arbitrage=True,
+                )
 
         orders = self.retail_trader.generate_orders()
         routed_trades = self.router.route_orders(
-            orders, self.amm_agent, self.amm_norm, fair_price, t
+            orders, self.submission_amm, self.benchmark_amm, fair_price, t
         )
         for trade in routed_trades:
-            step_retail_volume[trade.amm_name] += trade.amount_y
-            step_execution_count[trade.amm_name] += 1
-            step_execution_volume[trade.amm_name] += trade.amount_y
+            venue_key = "submission" if trade.amm_name == self.submission_amm.name else "benchmark"
+            step_retail_volume[venue_key] += trade.amount_y
+            step_execution_count[venue_key] += 1
+            step_execution_volume[venue_key] += trade.amount_y
             if trade.amm_buys_x:
-                step_net_flow_y[trade.amm_name] -= trade.amount_y
+                step_net_flow_y[venue_key] -= trade.amount_y
                 trade_edge = trade.amount_x * fair_price - trade.amount_y
             else:
-                step_net_flow_y[trade.amm_name] += trade.amount_y
+                step_net_flow_y[venue_key] += trade.amount_y
                 trade_edge = trade.amount_y - trade.amount_x * fair_price
-            self.edges[trade.amm_name] += trade_edge
+            self.edges[venue_key] += trade_edge
+            self._record_venue_trade(
+                venue_key=venue_key,
+                amount_y=trade.amount_y,
+                signed_flow_y=-trade.amount_y if trade.amm_buys_x else trade.amount_y,
+                is_arbitrage=False,
+            )
+
+        for mapping in [
+            step_arb_volume,
+            step_retail_volume,
+            step_execution_count,
+            step_execution_volume,
+            step_net_flow_y,
+            self.edges,
+        ]:
+            mapping["normalizer"] = mapping["benchmark"]
 
         self.current_fair_price = fair_price
         result = StepResult(
             timestamp=t,
             fair_price=fair_price,
             spot_prices={
-                "submission": self.amm_agent.spot_price,
-                "normalizer": self.amm_norm.spot_price,
+                "submission": self.submission_amm.spot_price,
+                "benchmark": self.benchmark_amm.spot_price,
+                "normalizer": self.benchmark_amm.spot_price,
             },
             pnls=self._compute_pnls(fair_price),
             edges=dict(self.edges),
@@ -166,7 +195,7 @@ class SimulationEngine:
             execution_count=step_execution_count,
             execution_volume_y=step_execution_volume,
             net_flow_y=step_net_flow_y,
-            ladder_depth_y=self.amm_agent.current_ladder_summary(),
+            ladder_depth_y=self._venue_summary(self.submission_amm),
             active_sigma=active_sigma,
         )
 
@@ -175,7 +204,7 @@ class SimulationEngine:
 
     def _compute_pnls(self, fair_price: float) -> dict[str, float]:
         pnls = {}
-        for amm in [self.amm_agent, self.amm_norm]:
+        for venue_key, amm in [("submission", self.submission_amm), ("benchmark", self.benchmark_amm)]:
             init_x, init_y = self.initial_reserves[amm.name]
             init_value = init_x * self.initial_fair_price + init_y
 
@@ -183,7 +212,8 @@ class SimulationEngine:
             fx = getattr(amm, "accumulated_fees_x", 0.0)
             fy = getattr(amm, "accumulated_fees_y", 0.0)
             curr_value = (rx * fair_price + ry) + (fx * fair_price + fy)
-            pnls[amm.name] = curr_value - init_value
+            pnls[venue_key] = curr_value - init_value
+        pnls["normalizer"] = pnls["benchmark"]
         return pnls
 
     @property
@@ -227,3 +257,78 @@ class SimulationEngine:
                 break
             sigma = scheduled_sigma
         return float(sigma)
+
+    def _resolve_submission_spec(self, cfg: SimConfig) -> VenueSpec:
+        if cfg.submission_venue is not None:
+            return cfg.submission_venue
+        return VenueSpec(
+            kind="depth_ladder",
+            name="submission",
+            reserve_x=cfg.initial_x,
+            reserve_y=cfg.initial_y,
+            band_bps=cfg.submission_band_bps,
+            base_notional_y=cfg.submission_base_notional_y,
+            controllable=True,
+        )
+
+    def _resolve_benchmark_spec(self, cfg: SimConfig) -> VenueSpec:
+        if cfg.benchmark_venue is not None:
+            return cfg.benchmark_venue
+        return VenueSpec(
+            kind="cpmm",
+            name="normalizer",
+            reserve_x=cfg.initial_x,
+            reserve_y=cfg.initial_y,
+            bid_fee=0.003,
+            ask_fee=0.003,
+            controllable=False,
+        )
+
+    def _configure_controllable_venues(self) -> None:
+        for spec, amm in [
+            (self.submission_spec, self.submission_amm),
+            (self.benchmark_spec, self.benchmark_amm),
+        ]:
+            if not hasattr(amm, "configure"):
+                continue
+            action = self._pending_agent_action if spec.controllable else spec.action_vector()
+            if isinstance(amm, DepthLadderAMM):
+                amm.configure(
+                    reference_price=self.current_fair_price,
+                    bid_raw=np.asarray(action[:3], dtype=np.float32),
+                    ask_raw=np.asarray(action[3:], dtype=np.float32),
+                )
+            elif isinstance(amm, ParametricQuoteSurfaceAMM):
+                amm.configure(
+                    reference_price=self.current_fair_price,
+                    action=np.asarray(action, dtype=np.float32),
+                )
+
+    def _record_venue_trade(
+        self,
+        *,
+        venue_key: str,
+        amount_y: float,
+        signed_flow_y: float,
+        is_arbitrage: bool,
+    ) -> None:
+        amm = self.submission_amm if venue_key == "submission" else self.benchmark_amm
+        record_trade = getattr(amm, "record_trade", None)
+        if callable(record_trade):
+            record_trade(
+                amount_y=float(amount_y),
+                signed_flow_y=float(signed_flow_y),
+                is_arbitrage=bool(is_arbitrage),
+            )
+
+    def _venue_summary(self, amm) -> dict[str, float]:
+        if hasattr(amm, "current_ladder_summary"):
+            return amm.current_ladder_summary()
+        if hasattr(amm, "current_quote_summary"):
+            return amm.current_quote_summary()
+        return {
+            "ask_near_depth_y": 0.0,
+            "ask_far_depth_y": 0.0,
+            "bid_near_depth_y": 0.0,
+            "bid_far_depth_y": 0.0,
+        }

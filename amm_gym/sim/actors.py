@@ -12,6 +12,8 @@ import numpy as np
 
 from amm_gym.sim.amm import ConstantProductAMM, TradeResult
 from amm_gym.sim.ladder import DepthLadderAMM
+from amm_gym.sim.quote_surface import ParametricQuoteSurfaceAMM
+from amm_gym.sim.venues import Venue
 
 
 # ---------------------------------------------------------------------------
@@ -35,10 +37,10 @@ class Arbitrageur:
     """
 
     def execute_arb(
-        self, amm: ConstantProductAMM | DepthLadderAMM, fair_price: float, timestamp: int
+        self, amm: ConstantProductAMM | DepthLadderAMM | ParametricQuoteSurfaceAMM, fair_price: float, timestamp: int
     ) -> ArbResult | None:
-        if isinstance(amm, DepthLadderAMM):
-            return self._execute_ladder_arb(amm, fair_price, timestamp)
+        if isinstance(amm, (DepthLadderAMM, ParametricQuoteSurfaceAMM)):
+            return self._execute_surface_arb(amm, fair_price, timestamp)
         spot = amm.spot_price
         if spot < fair_price:
             return self._buy_arb(amm, fair_price, timestamp)
@@ -46,8 +48,8 @@ class Arbitrageur:
             return self._sell_arb(amm, fair_price, timestamp)
         return None
 
-    def _execute_ladder_arb(
-        self, amm: DepthLadderAMM, fair_price: float, timestamp: int
+    def _execute_surface_arb(
+        self, amm: DepthLadderAMM | ParametricQuoteSurfaceAMM, fair_price: float, timestamp: int
     ) -> ArbResult | None:
         best_ask = amm.best_ask_price
         if fair_price > best_ask:
@@ -366,36 +368,38 @@ class OrderRouter:
     def route_order(
         self,
         order: RetailOrder,
-        amm_agent: ConstantProductAMM | DepthLadderAMM,
-        amm_norm: ConstantProductAMM,
+        submission_amm: Venue,
+        benchmark_amm: Venue,
         fair_price: float,
         timestamp: int,
     ) -> list[RoutedTrade]:
-        """Route a single retail order across agent and normalizer AMMs."""
+        """Route a single retail order across submission and benchmark AMMs."""
         trades: list[RoutedTrade] = []
 
         if order.side == "buy":
             # Trader wants to buy X, spending Y
-            if isinstance(amm_agent, ConstantProductAMM):
-                y1, y2 = self.split_buy_two_amms(amm_agent, amm_norm, order.size)
+            if isinstance(submission_amm, ConstantProductAMM) and isinstance(
+                benchmark_amm, ConstantProductAMM
+            ):
+                y1, y2 = self.split_buy_two_amms(submission_amm, benchmark_amm, order.size)
             else:
-                y1, y2 = self.solve_buy_split(amm_agent, amm_norm, order.size)
+                y1, y2 = self.solve_buy_split(submission_amm, benchmark_amm, order.size)
 
             if y1 > MIN_AMOUNT:
-                result = amm_agent.execute_buy_x_with_y(y1, timestamp)
+                result = submission_amm.execute_buy_x_with_y(y1, timestamp)
                 if result is not None:
                     trades.append(RoutedTrade(
-                        amm_name=amm_agent.name,
+                        amm_name=submission_amm.name,
                         amount_y=y1,
                         amount_x=result.amount_x,
                         amm_buys_x=False,
                     ))
 
             if y2 > MIN_AMOUNT:
-                result = amm_norm.execute_buy_x_with_y(y2, timestamp)
+                result = benchmark_amm.execute_buy_x_with_y(y2, timestamp)
                 if result is not None:
                     trades.append(RoutedTrade(
-                        amm_name=amm_norm.name,
+                        amm_name=benchmark_amm.name,
                         amount_y=y2,
                         amount_x=result.amount_x,
                         amm_buys_x=False,
@@ -403,26 +407,28 @@ class OrderRouter:
         else:
             # Trader wants to sell X, receiving Y
             total_x = order.size / fair_price
-            if isinstance(amm_agent, ConstantProductAMM):
-                x1, x2 = self.split_sell_two_amms(amm_agent, amm_norm, total_x)
+            if isinstance(submission_amm, ConstantProductAMM) and isinstance(
+                benchmark_amm, ConstantProductAMM
+            ):
+                x1, x2 = self.split_sell_two_amms(submission_amm, benchmark_amm, total_x)
             else:
-                x1, x2 = self.solve_sell_split(amm_agent, amm_norm, total_x)
+                x1, x2 = self.solve_sell_split(submission_amm, benchmark_amm, total_x)
 
             if x1 > MIN_AMOUNT:
-                result = amm_agent.execute_buy_x(x1, timestamp)
+                result = submission_amm.execute_buy_x(x1, timestamp)
                 if result is not None:
                     trades.append(RoutedTrade(
-                        amm_name=amm_agent.name,
+                        amm_name=submission_amm.name,
                         amount_y=result.amount_y,
                         amount_x=x1,
                         amm_buys_x=True,
                     ))
 
             if x2 > MIN_AMOUNT:
-                result = amm_norm.execute_buy_x(x2, timestamp)
+                result = benchmark_amm.execute_buy_x(x2, timestamp)
                 if result is not None:
                     trades.append(RoutedTrade(
-                        amm_name=amm_norm.name,
+                        amm_name=benchmark_amm.name,
                         amount_y=result.amount_y,
                         amount_x=x2,
                         amm_buys_x=True,
@@ -433,32 +439,39 @@ class OrderRouter:
     def route_orders(
         self,
         orders: list[RetailOrder],
-        amm_agent: ConstantProductAMM | DepthLadderAMM,
-        amm_norm: ConstantProductAMM,
+        submission_amm: Venue,
+        benchmark_amm: Venue,
         fair_price: float,
         timestamp: int,
     ) -> list[RoutedTrade]:
         all_trades: list[RoutedTrade] = []
         for order in orders:
             all_trades.extend(
-                self.route_order(order, amm_agent, amm_norm, fair_price, timestamp)
+                self.route_order(order, submission_amm, benchmark_amm, fair_price, timestamp)
             )
         return all_trades
 
     def solve_buy_split(
         self,
-        amm_agent: DepthLadderAMM,
-        amm_norm: ConstantProductAMM,
+        submission_amm: Venue,
+        benchmark_amm: Venue,
         total_y: float,
     ) -> tuple[float, float]:
-        def diff(amount_y_agent: float) -> float:
+        eps = 1e-12
+
+        def diff(amount_y_submission: float) -> float:
             return (
-                amm_agent.marginal_ask_price_after_y(amount_y_agent)
-                - amm_norm.marginal_ask_price_after_y(total_y - amount_y_agent)
+                submission_amm.marginal_ask_price_after_y(amount_y_submission)
+                - benchmark_amm.marginal_ask_price_after_y(total_y - amount_y_submission)
             )
 
         g0 = diff(0.0)
         g1 = diff(total_y)
+        mid = 0.5 * total_y
+        if abs(diff(mid)) <= eps:
+            return (mid, total_y - mid)
+        if abs(g0) <= eps and abs(g1) <= eps:
+            return (mid, total_y - mid)
         if g0 >= 0.0:
             return (0.0, total_y)
         if g1 <= 0.0:
@@ -472,23 +485,30 @@ class OrderRouter:
                 lo = mid
             else:
                 hi = mid
-        agent_y = 0.5 * (lo + hi)
-        return (agent_y, total_y - agent_y)
+        submission_y = 0.5 * (lo + hi)
+        return (submission_y, total_y - submission_y)
 
     def solve_sell_split(
         self,
-        amm_agent: DepthLadderAMM,
-        amm_norm: ConstantProductAMM,
+        submission_amm: Venue,
+        benchmark_amm: Venue,
         total_x: float,
     ) -> tuple[float, float]:
-        def diff(amount_x_agent: float) -> float:
+        eps = 1e-12
+
+        def diff(amount_x_submission: float) -> float:
             return (
-                amm_agent.marginal_bid_price_after_x(amount_x_agent)
-                - amm_norm.marginal_bid_price_after_x(total_x - amount_x_agent)
+                submission_amm.marginal_bid_price_after_x(amount_x_submission)
+                - benchmark_amm.marginal_bid_price_after_x(total_x - amount_x_submission)
             )
 
         g0 = diff(0.0)
         g1 = diff(total_x)
+        mid = 0.5 * total_x
+        if abs(diff(mid)) <= eps:
+            return (mid, total_x - mid)
+        if abs(g0) <= eps and abs(g1) <= eps:
+            return (mid, total_x - mid)
         if g0 <= 0.0:
             return (0.0, total_x)
         if g1 >= 0.0:
@@ -502,5 +522,5 @@ class OrderRouter:
                 lo = mid
             else:
                 hi = mid
-        agent_x = 0.5 * (lo + hi)
-        return (agent_x, total_x - agent_x)
+        submission_x = 0.5 * (lo + hi)
+        return (submission_x, total_x - submission_x)

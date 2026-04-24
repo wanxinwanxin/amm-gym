@@ -3,9 +3,17 @@
 import numpy as np
 import pytest
 
-from amm_gym.env import ACTION_DIM, ACTION_MAX, ACTION_MIN, AMMFeeEnv
+from amm_gym.env import (
+    ACTION_DIM,
+    ACTION_MAX,
+    ACTION_MIN,
+    CHALLENGE_ACTION_DIM,
+    AMMChallengeEnv,
+    AMMFeeEnv,
+)
 from amm_gym.baselines import StaticDepthPolicy
 from amm_gym.sim.engine import SimConfig
+from amm_gym.sim.venues import VenueSpec
 
 
 @pytest.fixture
@@ -157,3 +165,46 @@ class TestEnvBehavior:
             rewards_b.append(reward_b)
 
         np.testing.assert_allclose(rewards_a, rewards_b)
+
+    def test_env_supports_depth_ladder_benchmark(self):
+        benchmark_spec = VenueSpec(
+            kind="depth_ladder",
+            name="benchmark_ladder",
+            reserve_x=100.0,
+            reserve_y=10_000.0,
+            band_bps=(2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0),
+            base_notional_y=1_000.0,
+            controllable=False,
+            fixed_action=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        )
+        env = AMMFeeEnv(config=SimConfig(n_steps=10, seed=9, benchmark_venue=benchmark_spec))
+        env.reset(seed=9)
+        _, _, _, _, info = env.step(np.zeros(ACTION_DIM, dtype=np.float32))
+        assert "edge_benchmark" in info
+        assert "spot_price_benchmark" in info
+        assert "edge_normalizer" in info
+
+
+class TestChallengeEnv:
+    def test_challenge_action_space_is_fourteen_dimensional(self):
+        env = AMMChallengeEnv(config=SimConfig(n_steps=32, seed=5), window_size=6)
+        assert env.action_space.shape == (CHALLENGE_ACTION_DIM,)
+
+    def test_challenge_env_reward_sums_to_submission_edge(self):
+        env = AMMChallengeEnv(config=SimConfig(n_steps=48, seed=7), window_size=6)
+        env.reset(seed=7)
+        total_reward = 0.0
+        for _ in range(48):
+            _, reward, _, _, info = env.step(np.zeros(CHALLENGE_ACTION_DIM, dtype=np.float32))
+            total_reward += reward
+        assert total_reward == pytest.approx(info["edge"], rel=1e-6)
+
+    def test_challenge_env_exposes_sampled_benchmark_params(self):
+        env = AMMChallengeEnv(config=SimConfig(n_steps=16, seed=11), window_size=6)
+        obs, info = env.reset(seed=11)
+        assert "benchmark_fee_bps" in info
+        assert "benchmark_liquidity_mult" in info
+        assert info["benchmark_fee_bps"] >= 30
+        assert info["benchmark_fee_bps"] <= 80
+        assert 0.4 <= info["benchmark_liquidity_mult"] <= 2.0
+        assert obs.shape == env.observation_space.shape

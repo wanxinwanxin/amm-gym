@@ -13,12 +13,13 @@ Training code should depend on this contract, not simulator internals.
 
 ## Venue Model
 
-- Submission venue: depth-only ladder with fixed internal bands
-- Normalizer venue: fixed `30 bps` constant-product AMM
+- Submission venue: configurable, defaulting to a controllable depth-only ladder
+- Benchmark venue: configurable, defaulting to a fixed `30 bps` constant-product AMM
 - Submission bands are fixed at:
   `2, 4, 8, 16, 32, 64, 128 bps` from the lagged step reference price
 - The submission ladder is posted once per step and then used by both
   arbitrage and retail routing during that step
+- A benchmark venue may also be a fixed depth ladder via `SimConfig.benchmark_venue`
 - Volatility can remain constant for the full episode or change according to a
   schedule supplied through `SimConfig.volatility_schedule`
 - The active volatility regime is hidden from the policy
@@ -36,7 +37,8 @@ Training code should depend on this contract, not simulator internals.
   - `action[5]`: ask-side tilt
 - The environment maps this 6D control to positive bid/ask band depths
 - The action does not directly set submission fees
-- The normalizer is not controlled by the action
+- By default the benchmark venue is not controlled by the action
+- Current v1 engine supports at most one controllable venue
 
 ## Volatility Schedule Contract
 
@@ -85,19 +87,26 @@ Builder-facing guarantees:
 Training and evaluation code may rely on these `info` keys:
 
 - `edge`
+- `edge_benchmark`
 - `edge_normalizer`
 - `pnl`
+- `pnl_benchmark`
 - `pnl_normalizer`
 - `spot_price`
+- `spot_price_benchmark`
 - `spot_price_normalizer`
 - `step`
 - `execution_count`
+- `execution_count_benchmark`
 - `execution_count_normalizer`
 - `execution_volume_y`
+- `execution_volume_y_benchmark`
 - `execution_volume_y_normalizer`
 - `retail_volume_y`
+- `retail_volume_y_benchmark`
 - `retail_volume_y_normalizer`
 - `arb_volume_y`
+- `arb_volume_y_benchmark`
 - `arb_volume_y_normalizer`
 - `net_flow_y`
 - `ask_near_depth_y`
@@ -107,6 +116,9 @@ Training and evaluation code may rely on these `info` keys:
 
 `info` is for logging and diagnostics, not hidden-state leakage. It does not
 include the current hidden fair price or current active sigma.
+
+`*_normalizer` keys remain as compatibility aliases for the current default
+benchmark naming. New trainer code should prefer the `*_benchmark` aliases.
 
 ## Seeding Contract
 

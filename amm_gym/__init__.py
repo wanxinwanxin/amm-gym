@@ -1,3 +1,3 @@
-from amm_gym.env import AMMFeeEnv
+from amm_gym.env import AMMChallengeEnv, AMMFeeEnv
 
-__all__ = ["AMMFeeEnv"]
+__all__ = ["AMMFeeEnv", "AMMChallengeEnv"]
