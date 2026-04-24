@@ -313,7 +313,7 @@ $\mathrm{PnL}_T^v = V_T^v - V_0$.
 
 The differentiable simulator uses
 
-$score = E_T^{sub}$.
+$\text{score} = E_T^{sub}$.
 
 It also reports:
 
@@ -407,11 +407,11 @@ At iteration $k$:
 3. keep the top $\rho$ elite fraction
 4. set the next search mean and std to the elite sample mean and std
 
-Formally, if $\mathcal E_k$ is the elite set,
+Formally, if $\mathcal{E}_k$ is the elite set,
 
-$m_{k+1} = |\mathcal E_k|^{-1} \sum_{\theta \in \mathcal E_k} \theta$
+$m_{k+1} = |\mathcal{E}_k|^{-1} \sum_{\theta \in \mathcal{E}_k} \theta$
 
-$s_{k+1}^2 = |\mathcal E_k|^{-1} \sum_{\theta \in \mathcal E_k} (\theta - m_{k+1})^2$
+$s_{k+1}^2 = |\mathcal{E}_k|^{-1} \sum_{\theta \in \mathcal{E}_k} (\theta - m_{k+1})^2$
 
 with a small floor on $s$.
 
@@ -444,17 +444,17 @@ $r_t(\psi) = \pi_\psi(a_t \mid o_t) / \pi_{\psi_{\text{old}}}(a_t \mid o_t)$.
 
 The full optimized loss is
 
-$L(\psi) = -L^{PPO}(\psi) + c_v E[(V_\psi(o_t) - \hat R_t)^2] - c_e E[H(\pi_\psi(\cdot|o_t))]$.
+$L(\psi) = -L^{\mathrm{PPO}}(\psi) + c_v\,\mathbb{E}\bigl[(V_\psi(o_t) - \hat{R}_t)^2\bigr] - c_e\,\mathbb{E}\bigl[H(\pi_\psi(\cdot \mid o_t))\bigr]$.
 
 Advantages are computed with GAE:
 
 $\delta_t = r_t + \gamma V(o_{t+1}) - V(o_t)$
 
-$A_t = \delta_t + \gamma \lambda \delta_{t+1} + \gamma^2 \lambda^2 \delta_{t+2} + ...$
+$A_t = \delta_t + \gamma \lambda \delta_{t+1} + \gamma^2 \lambda^2 \delta_{t+2} + \cdots$
 
 The reward fed into PPO can be:
 
-- raw env reward $\Delta edge$
+- raw env reward $\Delta\,\text{edge}$
 - delta edge advantage versus benchmark
 - delta PnL advantage versus benchmark
 - a balanced objective with inventory and action-smoothness penalties
@@ -491,19 +491,19 @@ The tape still supplies latent normals and uniforms, but order arrivals and
 sides are softly activated. For a per-step slot width $W$, the per-slot
 activation probability is
 
-$p_{slot} = 1 - exp(-\lambda / W)$.
+$p_{\mathrm{slot}} = 1 - \exp(-\lambda / W)$.
 
 The slot activity gate is
 
-$g^{arr}_{t,j} = sigmoid(alpha_{arr} (p_{slot} - U^{arr}_{t,j}))$.
+$g^{\mathrm{arr}}_{t,j} = \mathrm{sigmoid}\bigl(\alpha_{\mathrm{arr}} (p_{\mathrm{slot}} - U^{\mathrm{arr}}_{t,j})\bigr)$.
 
 The buy-side gate is
 
-$g^{buy}_{t,j} = sigmoid(alpha_{side} (p_{buy} - U^{side}_{t,j}))$.
+$g^{\mathrm{buy}}_{t,j} = \mathrm{sigmoid}\bigl(\alpha_{\mathrm{side}} (p_{\mathrm{buy}} - U^{\mathrm{side}}_{t,j})\bigr)$.
 
 Order sizes use the same lognormal transform:
 
-$Q_{t,j} = exp(\mu_{LN} + \sigma_{LN} Z^{size}_{t,j})$.
+$Q_{t,j} = \exp(\mu_{\mathrm{LN}} + \sigma_{\mathrm{LN}}\, Z^{\mathrm{size}}_{t,j})$.
 
 Then the effective smooth buy/sell order masses are
 
@@ -525,7 +525,7 @@ $\ell_t = \sum_r p_{t+1,r} \ell_t^{(r)}$.
 
 Then
 
-$F_{t+1} = F_t exp(\ell_t)$.
+$F_{t+1} = F_t \exp(\ell_t)$.
 
 Retail impact percentiles are also passed through smooth side decompositions
 using positive-part relaxations.
