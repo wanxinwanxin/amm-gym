@@ -8,11 +8,13 @@ from arena_eval.diff_simple_amm import (
     DiffMode,
     DiffSimpleAMMSimulatorConfig,
     FixedFeeDiffPolicy,
+    PiecewiseDiffPolicy,
     SubmissionCompactDiffPolicy,
     build_challenge_tape,
     run_challenge_rollout,
 )
 from arena_eval.exact_simple_amm import ExactSimpleAMMConfig, FixedFeeStrategy, run_seed
+from arena_policies.piecewise_controller import PiecewiseControllerParams, PiecewiseControllerStrategy
 from arena_policies.submission_safe import SubmissionCompactParams, SubmissionCompactStrategy
 
 
@@ -80,6 +82,48 @@ def test_diff_exact_path_matches_submission_compact_strategy() -> None:
     )
     exact_result = run_seed(
         SubmissionCompactStrategy(params),
+        seed,
+        config=exact_config,
+        normalizer_strategy=FixedFeeStrategy(),
+    )
+
+    assert diff_result.edge_submission == pytest.approx(exact_result.edge_submission)
+    assert diff_result.edge_normalizer == pytest.approx(exact_result.edge_normalizer)
+    assert diff_result.pnl_submission == pytest.approx(exact_result.pnl_submission)
+    assert diff_result.pnl_normalizer == pytest.approx(exact_result.pnl_normalizer)
+    assert diff_result.score == pytest.approx(exact_result.score)
+    assert diff_result.retail_volume_submission_y == pytest.approx(exact_result.retail_volume_submission_y)
+    assert diff_result.retail_volume_normalizer_y == pytest.approx(exact_result.retail_volume_normalizer_y)
+    assert diff_result.arb_volume_submission_y == pytest.approx(exact_result.arb_volume_submission_y)
+    assert diff_result.arb_volume_normalizer_y == pytest.approx(exact_result.arb_volume_normalizer_y)
+    assert diff_result.average_bid_fee_submission == pytest.approx(exact_result.average_bid_fee_submission)
+    assert diff_result.average_ask_fee_submission == pytest.approx(exact_result.average_ask_fee_submission)
+    assert diff_result.average_bid_fee_normalizer == pytest.approx(exact_result.average_bid_fee_normalizer)
+    assert diff_result.average_ask_fee_normalizer == pytest.approx(exact_result.average_ask_fee_normalizer)
+
+
+def test_diff_exact_path_matches_piecewise_strategy() -> None:
+    seed = 9
+    params = PiecewiseControllerParams(
+        base_fee=0.004,
+        signal_decay=0.76,
+        small_trade_threshold=0.002,
+        large_trade_threshold=0.018,
+        continuation_medium=0.006,
+        reversal_large=0.028,
+        continuation_to_same_side=1.4,
+        continuation_to_cross_side=0.15,
+    ).normalized()
+    exact_config = replace(ExactSimpleAMMConfig.from_seed(seed), n_steps=128)
+    tape = build_challenge_tape(config=exact_config, seed=seed)
+    diff_result = run_challenge_rollout(
+        config=DiffSimpleAMMSimulatorConfig(mode=DiffMode.EXACT_PATH, seed=seed, exact_config=exact_config),
+        tape=tape,
+        submission_policy=PiecewiseDiffPolicy(params=params),
+        normalizer_policy=FixedFeeDiffPolicy(),
+    )
+    exact_result = run_seed(
+        PiecewiseControllerStrategy(params),
         seed,
         config=exact_config,
         normalizer_strategy=FixedFeeStrategy(),

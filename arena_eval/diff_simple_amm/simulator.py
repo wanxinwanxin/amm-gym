@@ -10,9 +10,19 @@ from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
 from . import arb as diff_arb
 from . import router as diff_router
 from .amm import initialize_amm
-from .objectives import smooth_submission_compact_result, submission_compact_param_vector
+from .objectives import (
+    piecewise_param_vector,
+    smooth_piecewise_result,
+    smooth_submission_compact_result,
+    submission_compact_param_vector,
+)
 from .orders import decode_challenge_orders, decode_realistic_orders
-from .policies import DiffSimpleAMMPolicy, FixedFeeDiffPolicy, SubmissionCompactDiffPolicy
+from .policies import (
+    DiffSimpleAMMPolicy,
+    FixedFeeDiffPolicy,
+    PiecewiseDiffPolicy,
+    SubmissionCompactDiffPolicy,
+)
 from .types import (
     AMMState,
     ChallengeTape,
@@ -48,15 +58,23 @@ def run_rollout(
     """Run a challenge or realistic rollout in exact-path or smooth-train mode."""
 
     if config.mode is DiffMode.SMOOTH_TRAIN:
-        if not isinstance(submission_policy, SubmissionCompactDiffPolicy):
-            raise ValueError("smooth_train currently supports SubmissionCompactDiffPolicy only")
-        return smooth_submission_compact_result(
-            submission_compact_param_vector(submission_policy.params),
-            config=config.exact_config,
-            tape=tape,
-            relaxation=config.relaxation,
-            seed=config.seed,
-        )
+        if isinstance(submission_policy, SubmissionCompactDiffPolicy):
+            return smooth_submission_compact_result(
+                submission_compact_param_vector(submission_policy.params),
+                config=config.exact_config,
+                tape=tape,
+                relaxation=config.relaxation,
+                seed=config.seed,
+            )
+        if isinstance(submission_policy, PiecewiseDiffPolicy):
+            return smooth_piecewise_result(
+                piecewise_param_vector(submission_policy.params),
+                config=config.exact_config,
+                tape=tape,
+                relaxation=config.relaxation,
+                seed=config.seed,
+            )
+        raise ValueError("smooth_train currently supports SubmissionCompactDiffPolicy and PiecewiseDiffPolicy only")
     if config.mode is not DiffMode.EXACT_PATH:
         raise ValueError(f"Unsupported diff mode: {config.mode}")
     if isinstance(tape, ChallengeTape):

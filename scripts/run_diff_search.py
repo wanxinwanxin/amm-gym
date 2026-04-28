@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 
 from arena_search import (
     GradientSearchConfig,
-    evaluate_submission_compact_exact,
+    evaluate_policy_params_exact,
     gradient_ascent_search_with_validation,
 )
 
@@ -86,14 +86,15 @@ class ProgressLogger:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gradient search on the differentiable simple-AMM surrogate")
     parser.add_argument("--evaluator-kind", choices=("challenge", "real_data"), default="challenge")
-    parser.add_argument("--policy-family", choices=("submission_compact",), default="submission_compact")
+    parser.add_argument("--policy-family", choices=("submission_compact", "piecewise"), default="submission_compact")
     parser.add_argument("--train-seed-start", type=int, default=0)
     parser.add_argument("--train-seed-count", type=int, default=16)
     parser.add_argument("--validation-seed-start", type=int, default=1000)
     parser.add_argument("--validation-seed-count", type=int, default=32)
     parser.add_argument("--test-seed-start", type=int, default=2000)
     parser.add_argument("--test-seed-count", type=int, default=64)
-    parser.add_argument("--n-steps", type=int, default=256)
+    parser.add_argument("--train-n-steps", type=int, default=256)
+    parser.add_argument("--exact-eval-n-steps", type=int, default=10_000)
     parser.add_argument("--search-rng-seed", type=int, default=0)
     parser.add_argument("--iterations", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.02)
@@ -118,7 +119,8 @@ def main() -> None:
         test_seeds=test_seeds,
         evaluator_kind=args.evaluator_kind,
         normalizer_fee=args.normalizer_fee,
-        n_steps=args.n_steps,
+        train_n_steps=args.train_n_steps,
+        exact_eval_n_steps=args.exact_eval_n_steps,
         policy_family=args.policy_family,
     )
 
@@ -166,12 +168,12 @@ def main() -> None:
         )
         final_test = study.best_validation
         if test_seeds:
-            final_test = evaluate_submission_compact_exact(
+            final_test = evaluate_policy_params_exact(
                 study.best_validation.params,
                 test_seeds,
                 evaluator_kind=args.evaluator_kind,
                 normalizer_fee=args.normalizer_fee,
-                n_steps=args.n_steps,
+                n_steps=args.exact_eval_n_steps,
             )
 
         payload = {
@@ -185,7 +187,8 @@ def main() -> None:
                 "train_seeds": list(train_seeds),
                 "validation_seeds": list(validation_seeds),
                 "test_seeds": list(test_seeds),
-                "n_steps": args.n_steps,
+                "train_n_steps": args.train_n_steps,
+                "exact_eval_n_steps": args.exact_eval_n_steps,
                 "iterations": args.iterations,
                 "learning_rate": args.learning_rate,
                 "gradient_clip": args.gradient_clip,

@@ -10,13 +10,16 @@ from arena_search.diff_simple_amm_search import GradientSearchConfig, gradient_a
 
 
 @pytest.mark.parametrize("evaluator_kind", ["challenge", "real_data"])
-def test_gradient_search_smoke_runs(evaluator_kind: str) -> None:
+@pytest.mark.parametrize("policy_family", ["submission_compact", "piecewise"])
+def test_gradient_search_smoke_runs(evaluator_kind: str, policy_family: str) -> None:
     study = gradient_ascent_search_with_validation(
         GradientSearchConfig(
             train_seeds=(0, 1),
             validation_seeds=(2,),
             evaluator_kind=evaluator_kind,
-            n_steps=8,
+            train_n_steps=8,
+            exact_eval_n_steps=12,
+            policy_family=policy_family,
         ),
         iterations=2,
         learning_rate=0.01,
@@ -31,3 +34,4 @@ def test_gradient_search_smoke_runs(evaluator_kind: str) -> None:
     assert len(study.validation_rerank) >= 1
     assert math.isfinite(study.best_search.score)
     assert math.isfinite(study.best_validation.score)
+    assert study.best_validation.metadata["n_steps"] == 12

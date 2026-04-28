@@ -6,8 +6,9 @@ import math
 from dataclasses import dataclass
 from typing import Protocol
 
-from arena_policies.submission_safe import SubmissionCompactParams
 from arena_eval.diff_simple_amm.types import PolicyOutput, PolicyState, TradeEvent
+from arena_policies.piecewise_controller import PiecewiseControllerParams
+from arena_policies.submission_safe import SubmissionCompactParams
 
 
 class DiffSimpleAMMPolicy(Protocol):
@@ -120,6 +121,45 @@ class _SubmissionCompactState:
             fair_fast=float(values[16]),
             fair_slow=float(values[17]),
             initialized=float(values[18]),
+        )
+
+
+@dataclass(frozen=True)
+class _PiecewiseState:
+    last_timestamp: int = 0
+    last_side: int = 0
+    bid_signal: float = 0.0
+    ask_signal: float = 0.0
+    bid_toxicity: float = 0.0
+    ask_toxicity: float = 0.0
+    initialized: float = 0.0
+
+    def to_policy_state(self) -> PolicyState:
+        return PolicyState(
+            (
+                float(self.last_timestamp),
+                float(self.last_side),
+                self.bid_signal,
+                self.ask_signal,
+                self.bid_toxicity,
+                self.ask_toxicity,
+                self.initialized,
+            )
+        )
+
+    @classmethod
+    def from_policy_state(cls, state: PolicyState) -> "_PiecewiseState":
+        if not state.values:
+            return cls()
+        values = state.values
+        return cls(
+            last_timestamp=int(values[0]),
+            last_side=int(values[1]),
+            bid_signal=float(values[2]),
+            ask_signal=float(values[3]),
+            bid_toxicity=float(values[4]),
+            ask_toxicity=float(values[5]),
+            initialized=float(values[6]),
         )
 
 
@@ -264,3 +304,93 @@ class SubmissionCompactDiffPolicy:
             initialized=1.0,
         )
         return (next_state, size_ratio)
+
+
+@dataclass(frozen=True)
+class PiecewiseDiffPolicy:
+    """Functional port of `PiecewiseControllerStrategy` for exact-path parity."""
+
+    params: PiecewiseControllerParams = PiecewiseControllerParams()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "params", self.params.normalized())
+
+    def initialize(self, initial_x: float, initial_y: float) -> PolicyOutput:
+        del initial_x, initial_y
+        state = _PiecewiseState(initialized=1.0)
+        bid_fee, ask_fee = self._fees(state)
+        return PolicyOutput(bid_fee=bid_fee, ask_fee=ask_fee, state=state.to_policy_state())
+
+    def after_event(self, state: PolicyState, trade: TradeEvent) -> PolicyOutput:
+        params = self.params
+        current = _PiecewiseState.from_policy_state(state)
+        dt = 1 if current.initialized < 0.5 else max(1, int(trade.timestamp - current.last_timestamp))
+        size_ratio = _size_ratio(trade)
+        continuation_weight, reversal_weight = self._bucket_weights(size_ratio)
+        reversal_scale = 1.0 / float(dt)
+        side = 1 if trade.is_buy else -1
+
+        bid_signal = current.bid_signal * params.signal_decay
+        ask_signal = current.ask_signal * params.signal_decay
+        bid_toxicity = current.bid_toxicity * params.toxicity_decay
+        ask_toxicity = current.ask_toxicity * params.toxicity_decay
+
+        if side == current.last_side:
+            if trade.is_buy:
+                bid_signal += continuation_weight
+            else:
+                ask_signal += continuation_weight
+        elif current.last_side != 0:
+            if trade.is_buy:
+                ask_toxicity += reversal_weight * reversal_scale
+                bid_signal += 0.5 * continuation_weight
+            else:
+                bid_toxicity += reversal_weight * reversal_scale
+                ask_signal += 0.5 * continuation_weight
+        else:
+            if trade.is_buy:
+                bid_signal += 0.5 * continuation_weight
+            else:
+                ask_signal += 0.5 * continuation_weight
+
+        next_state = _PiecewiseState(
+            last_timestamp=int(trade.timestamp),
+            last_side=side,
+            bid_signal=bid_signal,
+            ask_signal=ask_signal,
+            bid_toxicity=bid_toxicity,
+            ask_toxicity=ask_toxicity,
+            initialized=1.0,
+        )
+        bid_fee, ask_fee = self._fees(next_state)
+        return PolicyOutput(bid_fee=bid_fee, ask_fee=ask_fee, state=next_state.to_policy_state())
+
+    def _bucket_weights(self, size_ratio: float) -> tuple[float, float]:
+        params = self.params
+        if size_ratio < params.small_trade_threshold:
+            return (params.continuation_small, params.reversal_small)
+        if size_ratio < params.large_trade_threshold:
+            return (params.continuation_medium, params.reversal_medium)
+        return (params.continuation_large, params.reversal_large)
+
+    def _fees(self, state: _PiecewiseState) -> tuple[float, float]:
+        params = self.params
+        toxicity_total = state.bid_toxicity + state.ask_toxicity
+        base = params.base_fee + 0.5 * params.base_spread + params.toxicity_to_mid * toxicity_total
+        bid_fee = _clamp(
+            base
+            + params.toxicity_to_side * state.bid_toxicity
+            - params.continuation_to_same_side * state.bid_signal
+            + params.continuation_to_cross_side * state.ask_signal,
+            0.0,
+            0.1,
+        )
+        ask_fee = _clamp(
+            base
+            + params.toxicity_to_side * state.ask_toxicity
+            - params.continuation_to_same_side * state.ask_signal
+            + params.continuation_to_cross_side * state.bid_signal,
+            0.0,
+            0.1,
+        )
+        return (bid_fee, ask_fee)

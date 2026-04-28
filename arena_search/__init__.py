@@ -6,6 +6,7 @@ from arena_search.diff_simple_amm_search import (
     GradientSearchIteration,
     GradientSearchStudyResult,
     build_diff_cases,
+    evaluate_policy_params_exact,
     evaluate_submission_compact_exact,
     gradient_ascent_search_with_validation,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "build_diff_cases",
     "cross_entropy_search",
     "cross_entropy_search_with_validation",
+    "evaluate_policy_params_exact",
     "evaluate_submission_compact_exact",
     "evaluate_params_on_seeds",
     "evaluate_controller_params",

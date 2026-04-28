@@ -10,16 +10,22 @@ import jax.numpy as jnp
 from arena_eval.diff_simple_amm import (
     DiffMode,
     DiffSimpleAMMSimulatorConfig,
+    PiecewiseDiffPolicy,
     SubmissionCompactDiffPolicy,
     build_challenge_tape,
     challenge_env_vector,
+    expected_piecewise_edge,
     expected_submission_edge,
+    piecewise_param_vector,
     run_challenge_rollout,
+    smooth_piecewise_batch_result,
+    smooth_piecewise_result,
     smooth_submission_compact_batch_result,
     smooth_submission_compact_result,
     submission_compact_param_vector,
 )
 from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
+from arena_policies.piecewise_controller import PiecewiseControllerParams
 from arena_policies.submission_safe import SubmissionCompactParams
 
 
@@ -30,6 +36,19 @@ def test_smooth_train_rollout_runs_via_simulator_mode() -> None:
         config=DiffSimpleAMMSimulatorConfig(mode=DiffMode.SMOOTH_TRAIN, seed=3, exact_config=config),
         tape=tape,
         submission_policy=SubmissionCompactDiffPolicy(),
+    )
+
+    assert isinstance(result.score, float)
+    assert result.metadata["mode"] == "smooth_train"
+
+
+def test_smooth_train_rollout_runs_via_simulator_mode_for_piecewise() -> None:
+    config = replace(ExactSimpleAMMConfig.from_seed(4), n_steps=8)
+    tape = build_challenge_tape(config=config, seed=4)
+    result = run_challenge_rollout(
+        config=DiffSimpleAMMSimulatorConfig(mode=DiffMode.SMOOTH_TRAIN, seed=4, exact_config=config),
+        tape=tape,
+        submission_policy=PiecewiseDiffPolicy(),
     )
 
     assert isinstance(result.score, float)
@@ -74,11 +93,47 @@ def test_smooth_submission_edge_has_environment_gradient() -> None:
     assert jnp.all(jnp.isfinite(grad))
 
 
+def test_smooth_piecewise_result_is_finite() -> None:
+    config = replace(ExactSimpleAMMConfig.from_seed(6), n_steps=8)
+    tape = build_challenge_tape(config=config, seed=6)
+    params = piecewise_param_vector(PiecewiseControllerParams())
+    env = challenge_env_vector(config)
+    result = smooth_piecewise_result(params, config=config, tape=tape, env_vector=env, seed=6)
+
+    assert result.score == pytest.approx(result.edge_submission)
+    assert jnp.isfinite(jnp.asarray(result.score))
+    assert jnp.isfinite(jnp.asarray(result.pnl_submission))
+
+
+def test_smooth_piecewise_edge_has_policy_gradient() -> None:
+    config = replace(ExactSimpleAMMConfig.from_seed(8), n_steps=8)
+    tape = build_challenge_tape(config=config, seed=8)
+    params = piecewise_param_vector(PiecewiseControllerParams())
+    env = challenge_env_vector(config)
+
+    value = expected_piecewise_edge(params, config=config, tape=tape, env_vector=env)
+    grad = jax.grad(lambda p: expected_piecewise_edge(p, config=config, tape=tape, env_vector=env))(params)
+
+    assert jnp.isfinite(value)
+    assert grad.shape == params.shape
+    assert jnp.all(jnp.isfinite(grad))
+
+
 def test_smooth_batch_result_aggregates_multiple_tapes() -> None:
     config = replace(ExactSimpleAMMConfig.from_seed(13), n_steps=8)
     tapes = tuple(build_challenge_tape(config=config, seed=seed) for seed in (13, 14))
     params = submission_compact_param_vector(SubmissionCompactParams())
     batch = smooth_submission_compact_batch_result(params, config=config, tapes=tapes)
+
+    assert isinstance(batch.score, float)
+    assert batch.metadata["n_tapes"] == 2
+
+
+def test_smooth_piecewise_batch_result_aggregates_multiple_tapes() -> None:
+    config = replace(ExactSimpleAMMConfig.from_seed(14), n_steps=8)
+    tapes = tuple(build_challenge_tape(config=config, seed=seed) for seed in (14, 15))
+    params = piecewise_param_vector(PiecewiseControllerParams())
+    batch = smooth_piecewise_batch_result(params, config=config, tapes=tapes)
 
     assert isinstance(batch.score, float)
     assert batch.metadata["n_tapes"] == 2
