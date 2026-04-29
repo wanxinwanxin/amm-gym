@@ -34,9 +34,11 @@ def test_tape_smooth_matches_exact_fixed_fee_challenge(seed: int) -> None:
         config=cfg,
         normalizer_strategy=FixedFeeStrategy(),
     )
-    # float32 in JAX vs float64 in numpy — relative tolerance 1e-3 is the bar.
+    # float64 throughout; tolerance is float-arith accumulation over n_steps.
     assert smooth.edge_submission == pytest.approx(exact.edge_submission, rel=1e-3, abs=1e-3)
     assert smooth.edge_normalizer == pytest.approx(exact.edge_normalizer, rel=1e-3, abs=1e-3)
+    assert smooth.pnl_submission == pytest.approx(exact.pnl_submission, rel=1e-3, abs=1e-3)
+    assert smooth.pnl_normalizer == pytest.approx(exact.pnl_normalizer, rel=1e-3, abs=1e-3)
     assert smooth.retail_volume_submission_y == pytest.approx(
         exact.retail_volume_submission_y, rel=1e-3, abs=1e-3
     )
@@ -48,6 +50,12 @@ def test_tape_smooth_matches_exact_fixed_fee_challenge(seed: int) -> None:
     )
     assert smooth.arb_volume_normalizer_y == pytest.approx(
         exact.arb_volume_normalizer_y, rel=1e-3, abs=1e-3
+    )
+    assert smooth.average_bid_fee_submission == pytest.approx(
+        exact.average_bid_fee_submission, rel=1e-6, abs=1e-9
+    )
+    assert smooth.average_ask_fee_submission == pytest.approx(
+        exact.average_ask_fee_submission, rel=1e-6, abs=1e-9
     )
 
 
@@ -64,6 +72,14 @@ def test_tape_smooth_matches_exact_fixed_fee_realistic(seed: int) -> None:
     )
     assert smooth.edge_submission == pytest.approx(exact.edge_submission, rel=5e-3, abs=1e-3)
     assert smooth.edge_normalizer == pytest.approx(exact.edge_normalizer, rel=5e-3, abs=1e-3)
+    assert smooth.pnl_submission == pytest.approx(exact.pnl_submission, rel=5e-3, abs=1e-3)
+    assert smooth.pnl_normalizer == pytest.approx(exact.pnl_normalizer, rel=5e-3, abs=1e-3)
+    assert smooth.retail_volume_submission_y == pytest.approx(
+        exact.retail_volume_submission_y, rel=5e-3, abs=1e-3
+    )
+    assert smooth.retail_volume_normalizer_y == pytest.approx(
+        exact.retail_volume_normalizer_y, rel=5e-3, abs=1e-3
+    )
 
 
 def test_tape_smooth_is_differentiable_in_fees_challenge() -> None:
