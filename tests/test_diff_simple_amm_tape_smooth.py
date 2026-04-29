@@ -241,3 +241,56 @@ def test_tape_smooth_piecewise_is_differentiable_in_params() -> None:
     grad = jax.grad(edge_of)(params)
     assert jnp.all(jnp.isfinite(grad))
     assert float(jnp.linalg.norm(grad)) > 0.0
+
+
+def test_tape_smooth_compact_is_differentiable_in_params_realistic() -> None:
+    # Picks a seed whose realistic tape has enough submission flow that
+    # at least one after_event fires; sparser tapes can give a genuine zero
+    # gradient simply because submission never trades.
+    seed = 3
+    cfg = replace(ExactSimpleAMMConfig.real_data_from_seed(seed), n_steps=64)
+    tape = build_realistic_tape(config=cfg, seed=seed)
+    params = submission_compact_param_vector(COMPACT_PARAMS)
+    from arena_eval.diff_simple_amm.tape_smooth import compact_metrics
+
+    def edge_of(p):
+        return compact_metrics(cfg, tape, p)["edge_submission"]
+
+    grad = jax.grad(edge_of)(params)
+    assert jnp.all(jnp.isfinite(grad))
+    assert float(jnp.linalg.norm(grad)) > 0.0
+
+
+def test_tape_smooth_piecewise_is_differentiable_in_params_realistic() -> None:
+    seed = 3
+    cfg = replace(ExactSimpleAMMConfig.real_data_from_seed(seed), n_steps=64)
+    tape = build_realistic_tape(config=cfg, seed=seed)
+    params = piecewise_param_vector(PIECEWISE_PARAMS)
+    from arena_eval.diff_simple_amm.tape_smooth import piecewise_metrics
+
+    def edge_of(p):
+        return piecewise_metrics(cfg, tape, p)["edge_submission"]
+
+    grad = jax.grad(edge_of)(params)
+    assert jnp.all(jnp.isfinite(grad))
+    assert float(jnp.linalg.norm(grad)) > 0.0
+
+
+def test_tape_smooth_fixed_fee_is_differentiable_realistic() -> None:
+    seed = 3
+    cfg = replace(ExactSimpleAMMConfig.real_data_from_seed(seed), n_steps=64)
+    tape = build_realistic_tape(config=cfg, seed=seed)
+    from arena_eval.diff_simple_amm.tape_smooth import fixed_fee_metrics_realistic
+
+    def edge_of(fee):
+        metrics = fixed_fee_metrics_realistic(
+            cfg, tape, submission_bid_fee=fee, submission_ask_fee=fee,
+        )
+        return metrics["edge_submission"]
+
+    fee = jnp.asarray(0.003, dtype=jnp.float64)
+    value = edge_of(fee)
+    grad = jax.grad(edge_of)(fee)
+    assert jnp.isfinite(value)
+    assert jnp.isfinite(grad)
+    assert float(jnp.abs(grad)) > 0.0
