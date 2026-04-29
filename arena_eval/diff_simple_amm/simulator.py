@@ -201,13 +201,13 @@ def _run_exact_rollout(
     exact_config = config.exact_config
     normalizer_policy = normalizer_policy or FixedFeeDiffPolicy()
     submission_state, submission_policy_state = initialize_amm(
-        reserve_x=exact_config.initial_x,
-        reserve_y=exact_config.initial_y,
+        reserve_x=exact_config.submission_initial_x,
+        reserve_y=exact_config.submission_initial_y,
         policy=submission_policy,
     )
     normalizer_state, normalizer_policy_state = initialize_amm(
-        reserve_x=exact_config.initial_x,
-        reserve_y=exact_config.initial_y,
+        reserve_x=exact_config.normalizer_initial_x,
+        reserve_y=exact_config.normalizer_initial_y,
         policy=normalizer_policy,
     )
     state = SimulatorState(
@@ -323,9 +323,8 @@ def _run_exact_rollout(
     return _result(
         state=state,
         seed=config.seed,
-        initial_x=exact_config.initial_x,
-        initial_y=exact_config.initial_y,
-        initial_price=exact_config.initial_price,
+        submission_initial_value=exact_config.submission_initial_value,
+        normalizer_initial_value=exact_config.normalizer_initial_value,
     )
 
 
@@ -333,11 +332,9 @@ def _result(
     *,
     state: SimulatorState,
     seed: int,
-    initial_x: float,
-    initial_y: float,
-    initial_price: float,
+    submission_initial_value: float,
+    normalizer_initial_value: float,
 ) -> DiffSimulationResult:
-    initial_value = initial_x * initial_price + initial_y
     reserve_submission = _mark_to_market(state.submission, state.fair_price)
     reserve_normalizer = _mark_to_market(state.normalizer, state.fair_price)
     steps = max(state.step, 1)
@@ -345,8 +342,8 @@ def _result(
         seed=seed,
         edge_submission=state.edge_submission,
         edge_normalizer=state.edge_normalizer,
-        pnl_submission=reserve_submission - initial_value,
-        pnl_normalizer=reserve_normalizer - initial_value,
+        pnl_submission=reserve_submission - submission_initial_value,
+        pnl_normalizer=reserve_normalizer - normalizer_initial_value,
         score=state.edge_submission,
         retail_volume_submission_y=state.retail_volume_submission_y,
         retail_volume_normalizer_y=state.retail_volume_normalizer_y,

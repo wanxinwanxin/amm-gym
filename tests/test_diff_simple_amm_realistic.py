@@ -94,3 +94,53 @@ def test_smooth_realistic_rollout_and_gradients_are_finite() -> None:
     assert jnp.isfinite(jnp.asarray(result.score))
     assert jnp.all(jnp.isfinite(policy_grad))
     assert jnp.all(jnp.isfinite(env_grad))
+
+
+@pytest.mark.parametrize("fraction", [0.1, 2.0])
+def test_diff_realistic_honors_submission_liquidity_fraction(fraction: float) -> None:
+    seed = 3
+    exact_config = replace(
+        ExactSimpleAMMConfig.real_data_from_seed(seed),
+        n_steps=64,
+        submission_liquidity_fraction=fraction,
+    )
+    tape = build_realistic_tape(config=exact_config, seed=seed)
+    diff_result = run_realistic_rollout(
+        config=DiffSimpleAMMSimulatorConfig(mode=DiffMode.EXACT_PATH, seed=seed, exact_config=exact_config),
+        tape=tape,
+        submission_policy=FixedFeeDiffPolicy(),
+        normalizer_policy=FixedFeeDiffPolicy(),
+    )
+    exact_result = run_seed(
+        FixedFeeStrategy(),
+        seed,
+        config=exact_config,
+        normalizer_strategy=FixedFeeStrategy(),
+    )
+
+    assert diff_result.edge_submission == pytest.approx(exact_result.edge_submission)
+    assert diff_result.edge_normalizer == pytest.approx(exact_result.edge_normalizer)
+    assert diff_result.pnl_submission == pytest.approx(exact_result.pnl_submission)
+    assert diff_result.pnl_normalizer == pytest.approx(exact_result.pnl_normalizer)
+    assert diff_result.retail_volume_submission_y == pytest.approx(exact_result.retail_volume_submission_y)
+    assert diff_result.retail_volume_normalizer_y == pytest.approx(exact_result.retail_volume_normalizer_y)
+    assert diff_result.arb_volume_submission_y == pytest.approx(exact_result.arb_volume_submission_y)
+    assert diff_result.arb_volume_normalizer_y == pytest.approx(exact_result.arb_volume_normalizer_y)
+
+
+def test_smooth_realistic_finite_with_submission_liquidity_fraction() -> None:
+    seed = 9
+    config = replace(
+        ExactSimpleAMMConfig.real_data_from_seed(seed),
+        n_steps=8,
+        submission_liquidity_fraction=0.5,
+    )
+    tape = build_realistic_tape(config=config, seed=seed)
+    params = submission_compact_param_vector(SubmissionCompactParams())
+    env = realistic_env_vector(config)
+
+    result = smooth_submission_compact_result(params, config=config, tape=tape, env_vector=env, seed=seed)
+    policy_grad = jax.grad(lambda p: expected_submission_edge(p, config=config, tape=tape, env_vector=env))(params)
+
+    assert jnp.isfinite(jnp.asarray(result.score))
+    assert jnp.all(jnp.isfinite(policy_grad))

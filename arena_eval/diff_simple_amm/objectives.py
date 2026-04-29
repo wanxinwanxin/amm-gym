@@ -591,18 +591,20 @@ def _normalize_realistic_env_vector(vector):
 
 def _smooth_rollout_challenge(*, policy_family: str, params, env, config, smooth_tape, relaxation):
     initial_submission = _amm_state(
-        reserve_x=config.initial_x,
-        reserve_y=config.initial_y,
+        reserve_x=config.submission_initial_x,
+        reserve_y=config.submission_initial_y,
         bid_fee=_policy_initial_bid_fee(policy_family, params),
         ask_fee=_policy_initial_ask_fee(policy_family, params),
     )
     initial_normalizer = _amm_state(
-        reserve_x=config.initial_x,
-        reserve_y=config.initial_y,
+        reserve_x=config.normalizer_initial_x,
+        reserve_y=config.normalizer_initial_y,
         bid_fee=0.003,
         ask_fee=0.003,
     )
-    initial_policy_state = _initial_policy_state(policy_family, config.initial_x, config.initial_y)
+    initial_policy_state = _initial_policy_state(
+        policy_family, config.submission_initial_x, config.submission_initial_y
+    )
     initial_carry = {
         "submission": initial_submission,
         "normalizer": initial_normalizer,
@@ -697,9 +699,10 @@ def _smooth_rollout_challenge(*, policy_family: str, params, env, config, smooth
         )
 
     final_carry, _ = jax.lax.scan(step_fn, initial_carry, scan_inputs)
-    initial_value = config.initial_x * config.initial_price + config.initial_y
-    pnl_submission = _mark_to_market(final_carry["submission"], final_carry["fair_price"]) - initial_value
-    pnl_normalizer = _mark_to_market(final_carry["normalizer"], final_carry["fair_price"]) - initial_value
+    submission_initial_value = config.submission_initial_value
+    normalizer_initial_value = config.normalizer_initial_value
+    pnl_submission = _mark_to_market(final_carry["submission"], final_carry["fair_price"]) - submission_initial_value
+    pnl_normalizer = _mark_to_market(final_carry["normalizer"], final_carry["fair_price"]) - normalizer_initial_value
     steps = max(int(config.n_steps), 1)
     return {
         "edge_submission": final_carry["edge_submission"],
@@ -726,18 +729,20 @@ def _smooth_rollout_realistic(*, policy_family: str, params, env, config, smooth
     impact_values = jnp.asarray(artifacts["impact_values"], dtype=jnp.float32)
 
     initial_submission = _amm_state(
-        reserve_x=config.initial_x,
-        reserve_y=config.initial_y,
+        reserve_x=config.submission_initial_x,
+        reserve_y=config.submission_initial_y,
         bid_fee=_policy_initial_bid_fee(policy_family, params),
         ask_fee=_policy_initial_ask_fee(policy_family, params),
     )
     initial_normalizer = _amm_state(
-        reserve_x=config.initial_x,
-        reserve_y=config.initial_y,
+        reserve_x=config.normalizer_initial_x,
+        reserve_y=config.normalizer_initial_y,
         bid_fee=0.003,
         ask_fee=0.003,
     )
-    initial_policy_state = _initial_policy_state(policy_family, config.initial_x, config.initial_y)
+    initial_policy_state = _initial_policy_state(
+        policy_family, config.submission_initial_x, config.submission_initial_y
+    )
     n_regimes = int(transition_matrix.shape[0])
     regime_index = max(0, min(int(config.regime_start) - 1, n_regimes - 1))
     initial_regime_probs = jax.nn.one_hot(regime_index, n_regimes, dtype=jnp.float32)
@@ -838,9 +843,10 @@ def _smooth_rollout_realistic(*, policy_family: str, params, env, config, smooth
         )
 
     final_carry, _ = jax.lax.scan(step_fn, initial_carry, scan_inputs)
-    initial_value = config.initial_x * config.initial_price + config.initial_y
-    pnl_submission = _mark_to_market(final_carry["submission"], final_carry["fair_price"]) - initial_value
-    pnl_normalizer = _mark_to_market(final_carry["normalizer"], final_carry["fair_price"]) - initial_value
+    submission_initial_value = config.submission_initial_value
+    normalizer_initial_value = config.normalizer_initial_value
+    pnl_submission = _mark_to_market(final_carry["submission"], final_carry["fair_price"]) - submission_initial_value
+    pnl_normalizer = _mark_to_market(final_carry["normalizer"], final_carry["fair_price"]) - normalizer_initial_value
     steps = max(int(config.n_steps), 1)
     return {
         "edge_submission": final_carry["edge_submission"],
@@ -953,8 +959,12 @@ def _smooth_process_realistic_slot(
     impact_log = jnp.interp(impact_pct, impact_pct_grid, impact_values)
 
     if config.retail_impact_scale_mode == "initial_state":
-        reserve_x = jnp.asarray(config.initial_x, dtype=jnp.float32)
-        reserve_y = jnp.asarray(config.initial_y, dtype=jnp.float32)
+        if config.retail_impact_reference_venue == "submission":
+            reserve_x = jnp.asarray(config.submission_initial_x, dtype=jnp.float32)
+            reserve_y = jnp.asarray(config.submission_initial_y, dtype=jnp.float32)
+        else:
+            reserve_x = jnp.asarray(config.normalizer_initial_x, dtype=jnp.float32)
+            reserve_y = jnp.asarray(config.normalizer_initial_y, dtype=jnp.float32)
         bid_fee = jnp.asarray(0.003, dtype=jnp.float32)
         ask_fee = jnp.asarray(0.003, dtype=jnp.float32)
     else:

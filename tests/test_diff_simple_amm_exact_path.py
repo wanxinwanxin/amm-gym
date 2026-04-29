@@ -102,6 +102,38 @@ def test_diff_exact_path_matches_submission_compact_strategy() -> None:
     assert diff_result.average_ask_fee_normalizer == pytest.approx(exact_result.average_ask_fee_normalizer)
 
 
+@pytest.mark.parametrize("fraction", [0.1, 2.0])
+def test_diff_challenge_honors_submission_liquidity_fraction(fraction: float) -> None:
+    seed = 11
+    exact_config = replace(
+        ExactSimpleAMMConfig.from_seed(seed),
+        n_steps=128,
+        submission_liquidity_fraction=fraction,
+    )
+    tape = build_challenge_tape(config=exact_config, seed=seed)
+    diff_result = run_challenge_rollout(
+        config=DiffSimpleAMMSimulatorConfig(mode=DiffMode.EXACT_PATH, seed=seed, exact_config=exact_config),
+        tape=tape,
+        submission_policy=FixedFeeDiffPolicy(),
+        normalizer_policy=FixedFeeDiffPolicy(),
+    )
+    exact_result = run_seed(
+        FixedFeeStrategy(),
+        seed,
+        config=exact_config,
+        normalizer_strategy=FixedFeeStrategy(),
+    )
+
+    assert diff_result.edge_submission == pytest.approx(exact_result.edge_submission)
+    assert diff_result.edge_normalizer == pytest.approx(exact_result.edge_normalizer)
+    assert diff_result.pnl_submission == pytest.approx(exact_result.pnl_submission)
+    assert diff_result.pnl_normalizer == pytest.approx(exact_result.pnl_normalizer)
+    assert diff_result.retail_volume_submission_y == pytest.approx(exact_result.retail_volume_submission_y)
+    assert diff_result.retail_volume_normalizer_y == pytest.approx(exact_result.retail_volume_normalizer_y)
+    assert diff_result.arb_volume_submission_y == pytest.approx(exact_result.arb_volume_submission_y)
+    assert diff_result.arb_volume_normalizer_y == pytest.approx(exact_result.arb_volume_normalizer_y)
+
+
 def test_diff_exact_path_matches_piecewise_strategy() -> None:
     seed = 9
     params = PiecewiseControllerParams(

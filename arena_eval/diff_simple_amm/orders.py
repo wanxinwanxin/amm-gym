@@ -50,7 +50,9 @@ def decode_realistic_orders(
 
     def reference_tuple() -> tuple[float, float, float, float]:
         if reference_state is None or config.retail_impact_scale_mode == "initial_state":
-            return (config.initial_x, config.initial_y, 0.003, 0.003)
+            if config.retail_impact_reference_venue == "submission":
+                return (config.submission_initial_x, config.submission_initial_y, 0.003, 0.003)
+            return (config.normalizer_initial_x, config.normalizer_initial_y, 0.003, 0.003)
         return (
             float(reference_state.reserve_x),
             float(reference_state.reserve_y),
