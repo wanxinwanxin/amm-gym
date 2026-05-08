@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 import numpy as np
@@ -17,9 +18,11 @@ EMPIRICAL_ROUTER_ARRIVAL_RATE = 186_085 / 645_123
 @dataclass(frozen=True)
 class ExactSimpleAMMConfig:
     n_steps: int = 10_000
+    step_seconds: float = 12.0
     initial_price: float = 100.0
     initial_x: float = 100.0
     initial_y: float = 10_000.0
+    submission_liquidity_fraction: float = 1.0
     gbm_mu: float = 0.0
     gbm_sigma: float = 0.000945
     gbm_dt: float = 1.0
@@ -37,6 +40,34 @@ class ExactSimpleAMMConfig:
     retail_impact_column: str = "router_impact_log"
     retail_impact_reference_venue: str = "normalizer"
     retail_impact_scale_mode: str = "current_state"
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.submission_liquidity_fraction) or self.submission_liquidity_fraction <= 0.0:
+            raise ValueError("submission_liquidity_fraction must be positive and finite")
+
+    @property
+    def submission_initial_x(self) -> float:
+        return float(self.initial_x) * float(self.submission_liquidity_fraction)
+
+    @property
+    def submission_initial_y(self) -> float:
+        return float(self.initial_y) * float(self.submission_liquidity_fraction)
+
+    @property
+    def normalizer_initial_x(self) -> float:
+        return float(self.initial_x)
+
+    @property
+    def normalizer_initial_y(self) -> float:
+        return float(self.initial_y)
+
+    @property
+    def submission_initial_value(self) -> float:
+        return self.submission_initial_x * float(self.initial_price) + self.submission_initial_y
+
+    @property
+    def normalizer_initial_value(self) -> float:
+        return self.normalizer_initial_x * float(self.initial_price) + self.normalizer_initial_y
 
     @classmethod
     def from_seed(cls, seed: int) -> "ExactSimpleAMMConfig":

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from statistics import mean
 from typing import Iterable
 
@@ -523,14 +523,14 @@ class ExactSimpleAMMSimulator:
         self.submission = StrategyAMM(
             "submission",
             self.submission_strategy,
-            self.config.initial_x,
-            self.config.initial_y,
+            self.config.submission_initial_x,
+            self.config.submission_initial_y,
         )
         self.normalizer = StrategyAMM(
             "normalizer",
             self.normalizer_strategy,
-            self.config.initial_x,
-            self.config.initial_y,
+            self.config.normalizer_initial_x,
+            self.config.normalizer_initial_y,
         )
         self.price_process = self._build_price_process()
         self.retail_trader = self._build_retail_trader()
@@ -542,6 +542,10 @@ class ExactSimpleAMMSimulator:
         self.current_fair_price = self.config.initial_price
         self.edge_submission = 0.0
         self.edge_normalizer = 0.0
+        self.retail_edge_submission = 0.0
+        self.retail_edge_normalizer = 0.0
+        self.arb_loss_submission = 0.0
+        self.arb_loss_normalizer = 0.0
         self.retail_volume_submission_y = 0.0
         self.retail_volume_normalizer_y = 0.0
         self.arb_volume_submission_y = 0.0
@@ -586,14 +590,20 @@ class ExactSimpleAMMSimulator:
         if self.config.retail_flow_kind == "empirical_impact":
             if not self.config.retail_impact_percentiles_path:
                 raise ValueError("Empirical retail evaluator requires percentile CSV path")
+            if self.config.retail_impact_reference_venue == "submission":
+                initial_x = self.config.submission_initial_x
+                initial_y = self.config.submission_initial_y
+            else:
+                initial_x = self.config.normalizer_initial_x
+                initial_y = self.config.normalizer_initial_y
             return EmpiricalImpactRetailTrader(
                 self.config.retail_arrival_rate,
                 self.config.retail_impact_percentiles_path,
                 impact_column=self.config.retail_impact_column,
                 reference_venue=self.config.retail_impact_reference_venue,
                 scale_mode=self.config.retail_impact_scale_mode,
-                initial_x=self.config.initial_x,
-                initial_y=self.config.initial_y,
+                initial_x=initial_x,
+                initial_y=initial_y,
                 seed=self.seed + 1,
             )
         raise ValueError(f"Unsupported retail_flow_kind: {self.config.retail_flow_kind}")
@@ -619,7 +629,8 @@ class ExactSimpleAMMSimulator:
         timestamp = self.current_step
         fair_price = self.price_process.step()
         self.current_fair_price = fair_price
-        initial_value = self.config.initial_x * self.config.initial_price + self.config.initial_y
+        submission_initial_value = self.config.submission_initial_value
+        normalizer_initial_value = self.config.normalizer_initial_value
         prev_submission_trade_count = self.submission_trade_count
         self.last_submission_trade = None
         trade_events: list[dict[str, object]] = []
@@ -628,8 +639,12 @@ class ExactSimpleAMMSimulator:
             return {
                 "edge_submission": self.edge_submission,
                 "edge_normalizer": self.edge_normalizer,
-                "pnl_submission": self._mark_to_market(self.submission) - initial_value,
-                "pnl_normalizer": self._mark_to_market(self.normalizer) - initial_value,
+                "retail_edge_submission": self.retail_edge_submission,
+                "retail_edge_normalizer": self.retail_edge_normalizer,
+                "arb_loss_submission": self.arb_loss_submission,
+                "arb_loss_normalizer": self.arb_loss_normalizer,
+                "pnl_submission": self._mark_to_market(self.submission) - submission_initial_value,
+                "pnl_normalizer": self._mark_to_market(self.normalizer) - normalizer_initial_value,
             }
 
         def global_quote_state() -> dict[str, float]:
@@ -646,6 +661,7 @@ class ExactSimpleAMMSimulator:
         if submission_arb is not None:
             pre_metrics = metric_snapshot()
             self.arb_volume_submission_y += submission_arb.amount_y
+            self.arb_loss_submission += submission_arb.profit
             self.edge_submission -= submission_arb.profit
             self.last_submission_trade = submission_arb.trade_info
             self.submission_trade_count += 1
@@ -681,6 +697,7 @@ class ExactSimpleAMMSimulator:
         if normalizer_arb is not None:
             pre_metrics = metric_snapshot()
             self.arb_volume_normalizer_y += normalizer_arb.amount_y
+            self.arb_loss_normalizer += normalizer_arb.profit
             self.edge_normalizer -= normalizer_arb.profit
             post_metrics = metric_snapshot()
             trade_events.append(
@@ -724,11 +741,13 @@ class ExactSimpleAMMSimulator:
             )
             if trade.amm_name == "submission":
                 self.retail_volume_submission_y += trade.amount_y
+                self.retail_edge_submission += trade_edge
                 self.edge_submission += trade_edge
                 self.last_submission_trade = trade.trade_info
                 self.submission_trade_count += 1
             else:
                 self.retail_volume_normalizer_y += trade.amount_y
+                self.retail_edge_normalizer += trade_edge
                 self.edge_normalizer += trade_edge
             post_metrics = metric_snapshot()
             trade_events.append(
@@ -765,9 +784,11 @@ class ExactSimpleAMMSimulator:
         return self.result()
 
     def result(self) -> SimulationResult:
-        initial_value = self.config.initial_x * self.config.initial_price + self.config.initial_y
-        pnl_submission = self._mark_to_market(self.submission) - initial_value
-        pnl_normalizer = self._mark_to_market(self.normalizer) - initial_value
+        submission_initial_value = self.config.submission_initial_value
+        normalizer_initial_value = self.config.normalizer_initial_value
+        episode_seconds = float(self.config.n_steps) * float(self.config.step_seconds)
+        pnl_submission = self._mark_to_market(self.submission) - submission_initial_value
+        pnl_normalizer = self._mark_to_market(self.normalizer) - normalizer_initial_value
         steps = max(self.config.n_steps, 1)
         return SimulationResult(
             seed=self.seed,
@@ -784,6 +805,13 @@ class ExactSimpleAMMSimulator:
             average_ask_fee_submission=self.ask_fee_submission_sum / steps,
             average_bid_fee_normalizer=self.bid_fee_normalizer_sum / steps,
             average_ask_fee_normalizer=self.ask_fee_normalizer_sum / steps,
+            retail_edge_submission=self.retail_edge_submission,
+            retail_edge_normalizer=self.retail_edge_normalizer,
+            arb_loss_submission=self.arb_loss_submission,
+            arb_loss_normalizer=self.arb_loss_normalizer,
+            initial_value=submission_initial_value,
+            initial_value_normalizer=normalizer_initial_value,
+            episode_seconds=episode_seconds,
         )
 
     def _mark_to_market(self, amm: StrategyAMM) -> float:
@@ -800,8 +828,11 @@ def run_seed(
     config: ExactSimpleAMMConfig | None = None,
     normalizer_strategy: ExactSimpleAMMStrategy | None = None,
     evaluator_kind: str = "challenge",
+    submission_liquidity_fraction: float | None = None,
 ) -> SimulationResult:
     exact_config = config or ExactSimpleAMMConfig.for_evaluator(seed, evaluator_kind)
+    if submission_liquidity_fraction is not None:
+        exact_config = replace(exact_config, submission_liquidity_fraction=float(submission_liquidity_fraction))
     simulator = ExactSimpleAMMSimulator(
         config=exact_config,
         submission_strategy=submission_strategy,
@@ -817,6 +848,7 @@ def run_batch(
     *,
     normalizer_strategy_factory=None,
     evaluator_kind: str = "challenge",
+    submission_liquidity_fraction: float | None = None,
 ) -> BatchResult:
     seed_values = tuple(int(seed) for seed in seeds)
     simulations = tuple(
@@ -825,6 +857,7 @@ def run_batch(
             seed,
             normalizer_strategy=(normalizer_strategy_factory() if normalizer_strategy_factory else FixedFeeStrategy()),
             evaluator_kind=evaluator_kind,
+            submission_liquidity_fraction=submission_liquidity_fraction,
         )
         for seed in seed_values
     )
@@ -838,10 +871,37 @@ def run_batch(
         pnl_mean_submission=float(mean(sim.pnl_submission for sim in simulations)),
         pnl_mean_normalizer=float(mean(sim.pnl_normalizer for sim in simulations)),
         pnl_advantage_mean=float(mean(sim.pnl_advantage for sim in simulations)),
-        metadata={"n_simulations": len(simulations)},
+        retail_edge_mean_submission=float(mean(sim.retail_edge_submission for sim in simulations)),
+        retail_edge_mean_normalizer=float(mean(sim.retail_edge_normalizer for sim in simulations)),
+        arb_loss_mean_submission=float(mean(sim.arb_loss_submission for sim in simulations)),
+        arb_loss_mean_normalizer=float(mean(sim.arb_loss_normalizer for sim in simulations)),
+        retail_volume_mean_submission_y=float(mean(sim.retail_volume_submission_y for sim in simulations)),
+        retail_volume_mean_normalizer_y=float(mean(sim.retail_volume_normalizer_y for sim in simulations)),
+        arb_volume_mean_submission_y=float(mean(sim.arb_volume_submission_y for sim in simulations)),
+        arb_volume_mean_normalizer_y=float(mean(sim.arb_volume_normalizer_y for sim in simulations)),
+        initial_value_mean=float(mean(sim.initial_value for sim in simulations)),
+        initial_value_mean_normalizer=float(mean(sim.initial_value_normalizer for sim in simulations)),
+        episode_seconds_mean=float(mean(sim.episode_seconds for sim in simulations)),
+        metadata={
+            "n_simulations": len(simulations),
+            "submission_liquidity_fraction": (
+                float(submission_liquidity_fraction) if submission_liquidity_fraction is not None else 1.0
+            ),
+        },
     )
 
 
-def score_challenge(submission_strategy_factory, *, n_simulations: int = 1000, evaluator_kind: str = "challenge") -> float:
-    batch = run_batch(submission_strategy_factory, range(n_simulations), evaluator_kind=evaluator_kind)
+def score_challenge(
+    submission_strategy_factory,
+    *,
+    n_simulations: int = 1000,
+    evaluator_kind: str = "challenge",
+    submission_liquidity_fraction: float | None = None,
+) -> float:
+    batch = run_batch(
+        submission_strategy_factory,
+        range(n_simulations),
+        evaluator_kind=evaluator_kind,
+        submission_liquidity_fraction=submission_liquidity_fraction,
+    )
     return batch.score

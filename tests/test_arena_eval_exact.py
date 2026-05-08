@@ -193,12 +193,42 @@ def test_real_data_simulator_runs():
     assert isinstance(result.score, float)
 
 
+def test_submission_liquidity_fraction_scales_submission_pool_only():
+    config = ExactSimpleAMMConfig(n_steps=0, submission_liquidity_fraction=0.1)
+    result = run_seed(FixedFeeStrategy(), 0, config=config)
+
+    assert result.initial_value == pytest.approx(2_000.0)
+    assert result.initial_value_normalizer == pytest.approx(20_000.0)
+    assert result.pnl_submission == pytest.approx(0.0)
+    assert result.pnl_normalizer == pytest.approx(0.0)
+
+
 def test_batch_score_matches_mean_submission_edge():
     batch = run_batch(lambda: FixedFeeStrategy(0.003, 0.003), range(5))
 
     expected = sum(sim.edge_submission for sim in batch.simulations) / len(batch.simulations)
     assert batch.score == pytest.approx(expected)
     assert batch.edge_mean_submission == pytest.approx(expected)
+
+
+def test_reporting_decomposes_edge_and_annualizes_returns():
+    config = ExactSimpleAMMConfig(n_steps=32)
+    result = run_seed(FixedFeeStrategy(), 3, config=config)
+
+    assert result.edge_submission == pytest.approx(result.retail_edge_submission - result.arb_loss_submission)
+    assert result.episode_seconds == pytest.approx(config.n_steps * config.step_seconds)
+    assert result.initial_value > 0.0
+    assert result.annualized_edge_return_submission == pytest.approx(
+        result.annualized_retail_edge_return_submission - result.annualized_arb_loss_return_submission
+    )
+
+    batch = run_batch(lambda: FixedFeeStrategy(), range(4))
+    assert batch.edge_mean_submission == pytest.approx(
+        batch.retail_edge_mean_submission - batch.arb_loss_mean_submission
+    )
+    assert batch.initial_value_mean > 0.0
+    assert batch.initial_value_mean_normalizer > 0.0
+    assert batch.episode_seconds_mean > 0.0
 
 
 def test_run_seed_is_deterministic():
