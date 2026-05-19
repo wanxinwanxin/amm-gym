@@ -77,10 +77,31 @@ def save_exact_search_report_plot(report_path: Path, output_path: Path) -> None:
     fresh_advantage = [
         _candidate_metric(record.get("fresh_validation"), "edge_advantage_mean") for record in history
     ]
+    fixed_retail_return = [
+        _candidate_metric(record.get("fixed_validation"), "annualized_retail_edge_return_mean_submission")
+        for record in history
+    ]
+    fresh_retail_return = [
+        _candidate_metric(record.get("fresh_validation"), "annualized_retail_edge_return_mean_submission")
+        for record in history
+    ]
+    fixed_arb_loss_return = [
+        _candidate_metric(record.get("fixed_validation"), "annualized_arb_loss_return_mean_submission")
+        for record in history
+    ]
+    fresh_arb_loss_return = [
+        _candidate_metric(record.get("fresh_validation"), "annualized_arb_loss_return_mean_submission")
+        for record in history
+    ]
 
     best_search = _candidate_score(payload.get("best_search"))
     best_validation = _candidate_score(payload.get("best_validation"))
     best_test = _candidate_score(payload.get("best_test"))
+    final_candidate = payload.get("best_test") or payload.get("best_validation") or payload.get("best_search")
+    final_initial_value = _candidate_metric(final_candidate, "initial_value_mean")
+    final_episode_seconds = _candidate_metric(final_candidate, "episode_seconds_mean")
+    final_retail_markout = _candidate_metric(final_candidate, "retail_markout_bps_mean_submission")
+    final_arb_markout = _candidate_metric(final_candidate, "arb_markout_bps_mean_submission")
 
     method = str(payload.get("method", "unknown")).upper()
     objective = str(payload.get("objective", "score"))
@@ -89,11 +110,13 @@ def save_exact_search_report_plot(report_path: Path, output_path: Path) -> None:
         search_cfg = {}
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig = plt.figure(figsize=(14, 9), constrained_layout=True)
-    gs = fig.add_gridspec(2, 2, height_ratios=[2.1, 1.0], hspace=0.28, wspace=0.2)
+    fig = plt.figure(figsize=(14, 11), constrained_layout=True)
+    gs = fig.add_gridspec(3, 2, height_ratios=[2.0, 1.15, 0.95], hspace=0.28, wspace=0.2)
     ax_scores = fig.add_subplot(gs[0, :])
     ax_gap = fig.add_subplot(gs[1, 0])
-    ax_summary = fig.add_subplot(gs[1, 1])
+    ax_components = fig.add_subplot(gs[1, 1])
+    ax_summary = fig.add_subplot(gs[2, 0])
+    ax_notes = fig.add_subplot(gs[2, 1])
 
     ax_scores.plot(
         iterations,
@@ -176,6 +199,55 @@ def save_exact_search_report_plot(report_path: Path, output_path: Path) -> None:
     ax_gap.grid(alpha=0.25)
     ax_gap.legend(loc="best")
 
+    if any(value is not None for value in fixed_retail_return + fresh_retail_return + fixed_arb_loss_return + fresh_arb_loss_return):
+        fixed_retail_pct = [100.0 * value if value is not None else None for value in fixed_retail_return]
+        fresh_retail_pct = [100.0 * value if value is not None else None for value in fresh_retail_return]
+        fixed_arb_pct = [100.0 * value if value is not None else None for value in fixed_arb_loss_return]
+        fresh_arb_pct = [100.0 * value if value is not None else None for value in fresh_arb_loss_return]
+        ax_components.plot(
+            iterations,
+            fixed_retail_pct,
+            color="#16a34a",
+            marker="o",
+            linewidth=2.2,
+            label="fixed val retail capture",
+        )
+        ax_components.plot(
+            iterations,
+            fresh_retail_pct,
+            color="#15803d",
+            marker="o",
+            linewidth=2.0,
+            linestyle="--",
+            label="fresh val retail capture",
+        )
+        ax_components.plot(
+            iterations,
+            fixed_arb_pct,
+            color="#dc2626",
+            marker="o",
+            linewidth=2.2,
+            label="fixed val arb loss",
+        )
+        ax_components.plot(
+            iterations,
+            fresh_arb_pct,
+            color="#b91c1c",
+            marker="o",
+            linewidth=2.0,
+            linestyle="--",
+            label="fresh val arb loss",
+        )
+        ax_components.set_title("Annualized Component Returns")
+        ax_components.set_xlabel("iteration")
+        ax_components.set_ylabel("% of initial pool value / year")
+        ax_components.grid(alpha=0.25)
+        ax_components.legend(loc="best")
+    else:
+        ax_components.set_title("Annualized Component Returns")
+        ax_components.text(0.5, 0.5, "component metrics unavailable", ha="center", va="center")
+        ax_components.axis("off")
+
     summary_labels: list[str] = []
     summary_values: list[float] = []
     summary_colors: list[str] = []
@@ -204,6 +276,29 @@ def save_exact_search_report_plot(report_path: Path, output_path: Path) -> None:
     ax_summary.set_ylabel(objective)
     ax_summary.tick_params(axis="x", rotation=12)
     ax_summary.grid(axis="y", alpha=0.25)
+
+    ax_notes.axis("off")
+    note_lines = []
+    if final_initial_value is not None:
+        note_lines.append(f"initial pool value: {final_initial_value:,.0f} quote units")
+    if final_episode_seconds is not None:
+        note_lines.append(f"episode length: {final_episode_seconds / 3600.0:.1f} hours")
+    if final_retail_markout is not None:
+        note_lines.append(f"retail markout: {final_retail_markout:.2f} bps")
+    if final_arb_markout is not None:
+        note_lines.append(f"arb loss rate: {final_arb_markout:.2f} bps")
+    if not note_lines:
+        note_lines.append("enhanced reporting unavailable")
+    ax_notes.set_title("Economic Interpretation")
+    ax_notes.text(
+        0.02,
+        0.98,
+        "\n".join(note_lines),
+        ha="left",
+        va="top",
+        fontsize=10,
+        color="#334155",
+    )
 
     if any(value is not None for value in fixed_advantage + fresh_advantage):
         advantage_text = [
