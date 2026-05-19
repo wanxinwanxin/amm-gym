@@ -26,6 +26,17 @@ def _candidate_payload(candidate) -> dict[str, object]:
         "edge_mean_submission": candidate.edge_mean_submission,
         "edge_mean_normalizer": candidate.edge_mean_normalizer,
         "edge_advantage_mean": candidate.edge_advantage_mean,
+        "retail_edge_mean_submission": candidate.retail_edge_mean_submission,
+        "retail_edge_mean_normalizer": candidate.retail_edge_mean_normalizer,
+        "arb_loss_mean_submission": candidate.arb_loss_mean_submission,
+        "arb_loss_mean_normalizer": candidate.arb_loss_mean_normalizer,
+        "annualized_edge_return_mean_submission": candidate.annualized_edge_return_mean_submission,
+        "annualized_retail_edge_return_mean_submission": candidate.annualized_retail_edge_return_mean_submission,
+        "annualized_arb_loss_return_mean_submission": candidate.annualized_arb_loss_return_mean_submission,
+        "retail_markout_bps_mean_submission": candidate.retail_markout_bps_mean_submission,
+        "arb_markout_bps_mean_submission": candidate.arb_markout_bps_mean_submission,
+        "initial_value_mean": candidate.initial_value_mean,
+        "episode_seconds_mean": candidate.episode_seconds_mean,
         "params": candidate.params.to_dict(),
     }
 
@@ -123,6 +134,12 @@ def main() -> None:
     parser.add_argument("--fresh-validation-seed-count", type=int, default=64)
     parser.add_argument("--rerank-top-k", type=int, default=8)
     parser.add_argument("--normalizer-fee", type=float, default=0.003)
+    parser.add_argument(
+        "--submission-liquidity-fraction",
+        type=float,
+        default=1.0,
+        help="Initial submission-pool liquidity as a fraction of the normalizer pool",
+    )
     parser.add_argument("--rounds", type=int, default=8, help="Random-search rounds")
     parser.add_argument("--candidates-per-round", type=int, default=16, help="Random-search batch size")
     parser.add_argument("--generations", type=int, default=8, help="CEM generations")
@@ -156,6 +173,7 @@ def main() -> None:
         normalizer_fee=args.normalizer_fee,
         policy_family=args.policy_family,
         evaluator_kind=args.evaluator_kind,
+        submission_liquidity_fraction=args.submission_liquidity_fraction,
     )
 
     progress_log_path = args.progress_log
@@ -220,6 +238,7 @@ def main() -> None:
                 test_seeds,
                 normalizer_fee=args.normalizer_fee,
                 evaluator_kind=args.evaluator_kind,
+                submission_liquidity_fraction=args.submission_liquidity_fraction,
             )
 
         cross_eval = {}
@@ -230,6 +249,7 @@ def main() -> None:
                     test_seeds,
                     normalizer_fee=args.normalizer_fee,
                     evaluator_kind=evaluator_kind,
+                    submission_liquidity_fraction=args.submission_liquidity_fraction,
                 )
             )
 
@@ -239,6 +259,7 @@ def main() -> None:
             "policy_family": args.policy_family,
             "evaluator_kind": args.evaluator_kind,
             "normalizer_fee": args.normalizer_fee,
+            "submission_liquidity_fraction": args.submission_liquidity_fraction,
             "search": {
                 "rng_seed": args.search_rng_seed,
                 "search_seeds": list(search_seeds),

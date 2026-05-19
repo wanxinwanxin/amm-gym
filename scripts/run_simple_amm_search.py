@@ -22,10 +22,19 @@ def main() -> None:
     parser.add_argument("--candidates", type=int, default=32)
     parser.add_argument("--generations", type=int, default=4)
     parser.add_argument("--population-size", type=int, default=16)
+    parser.add_argument(
+        "--submission-liquidity-fraction",
+        type=float,
+        default=1.0,
+        help="Initial submission-pool liquidity as a fraction of the normalizer pool",
+    )
     parser.add_argument("--output", type=Path, default=Path("experiments/simple_amm_best_params.json"))
     args = parser.parse_args()
 
-    config = SearchConfig(seeds=tuple(range(args.seed_count)))
+    config = SearchConfig(
+        seeds=tuple(range(args.seed_count)),
+        submission_liquidity_fraction=args.submission_liquidity_fraction,
+    )
     if args.method == "random":
         evaluations = random_search(config, n_candidates=args.candidates, seed=args.search_seed)
     else:
@@ -41,6 +50,18 @@ def main() -> None:
         "edge_mean_submission": best.edge_mean_submission,
         "edge_mean_normalizer": best.edge_mean_normalizer,
         "edge_advantage_mean": best.edge_advantage_mean,
+        "retail_edge_mean_submission": best.retail_edge_mean_submission,
+        "retail_edge_mean_normalizer": best.retail_edge_mean_normalizer,
+        "arb_loss_mean_submission": best.arb_loss_mean_submission,
+        "arb_loss_mean_normalizer": best.arb_loss_mean_normalizer,
+        "annualized_edge_return_mean_submission": best.annualized_edge_return_mean_submission,
+        "annualized_retail_edge_return_mean_submission": best.annualized_retail_edge_return_mean_submission,
+        "annualized_arb_loss_return_mean_submission": best.annualized_arb_loss_return_mean_submission,
+        "retail_markout_bps_mean_submission": best.retail_markout_bps_mean_submission,
+        "arb_markout_bps_mean_submission": best.arb_markout_bps_mean_submission,
+        "initial_value_mean": best.initial_value_mean,
+        "episode_seconds_mean": best.episode_seconds_mean,
+        "submission_liquidity_fraction": args.submission_liquidity_fraction,
         "params": best.params.to_dict(),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from arena_search import (
     SearchConfig,
     cross_entropy_search,
@@ -31,6 +33,11 @@ def test_evaluate_controller_params_runs():
     )
     assert isinstance(evaluation.score, float)
     assert evaluation.edge_mean_submission == evaluation.score
+    assert evaluation.edge_mean_submission == pytest.approx(
+        evaluation.retail_edge_mean_submission - evaluation.arb_loss_mean_submission
+    )
+    assert evaluation.initial_value_mean > 0.0
+    assert evaluation.episode_seconds_mean > 0.0
 
 
 def test_evaluate_inventory_toxicity_params_runs():
@@ -101,6 +108,15 @@ def test_evaluate_piecewise_params_runs_on_real_data_evaluator():
     )
     assert isinstance(evaluation.score, float)
     assert evaluation.edge_mean_submission == evaluation.score
+
+
+def test_evaluate_params_supports_smaller_submission_liquidity():
+    evaluation = evaluate_controller_params(
+        ReactiveControllerParams(),
+        SearchConfig(seeds=(0,), submission_liquidity_fraction=0.1),
+    )
+    assert isinstance(evaluation.score, float)
+    assert evaluation.initial_value_mean == pytest.approx(2_000.0)
 
 
 def test_random_search_sorts_candidates():

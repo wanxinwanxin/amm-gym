@@ -313,6 +313,7 @@ class SearchConfig:
     normalizer_fee: float = 0.003
     policy_family: str = "reactive"
     evaluator_kind: str = "challenge"
+    submission_liquidity_fraction: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -322,6 +323,17 @@ class CandidateEvaluation:
     edge_mean_submission: float
     edge_mean_normalizer: float
     edge_advantage_mean: float
+    retail_edge_mean_submission: float
+    retail_edge_mean_normalizer: float
+    arb_loss_mean_submission: float
+    arb_loss_mean_normalizer: float
+    annualized_edge_return_mean_submission: float
+    annualized_retail_edge_return_mean_submission: float
+    annualized_arb_loss_return_mean_submission: float
+    retail_markout_bps_mean_submission: float
+    arb_markout_bps_mean_submission: float
+    initial_value_mean: float
+    episode_seconds_mean: float
     metadata: dict[str, object]
 
 
@@ -349,6 +361,7 @@ def evaluate_controller_params(params: Any, config: SearchConfig) -> CandidateEv
         config.seeds,
         normalizer_fee=config.normalizer_fee,
         evaluator_kind=config.evaluator_kind,
+        submission_liquidity_fraction=config.submission_liquidity_fraction,
     )
 
 
@@ -358,6 +371,7 @@ def evaluate_params_on_seeds(
     *,
     normalizer_fee: float = 0.003,
     evaluator_kind: str = "challenge",
+    submission_liquidity_fraction: float = 1.0,
 ) -> CandidateEvaluation:
     normalized = params.normalized()
     strategy_cls = _strategy_cls_for_params(normalized)
@@ -366,6 +380,7 @@ def evaluate_params_on_seeds(
         seeds,
         normalizer_strategy_factory=lambda: FixedFeeStrategy(normalizer_fee, normalizer_fee),
         evaluator_kind=evaluator_kind,
+        submission_liquidity_fraction=submission_liquidity_fraction,
     )
     return CandidateEvaluation(
         params=normalized,
@@ -373,6 +388,17 @@ def evaluate_params_on_seeds(
         edge_mean_submission=result.edge_mean_submission,
         edge_mean_normalizer=result.edge_mean_normalizer,
         edge_advantage_mean=result.edge_advantage_mean,
+        retail_edge_mean_submission=result.retail_edge_mean_submission,
+        retail_edge_mean_normalizer=result.retail_edge_mean_normalizer,
+        arb_loss_mean_submission=result.arb_loss_mean_submission,
+        arb_loss_mean_normalizer=result.arb_loss_mean_normalizer,
+        annualized_edge_return_mean_submission=result.annualized_edge_return_mean_submission,
+        annualized_retail_edge_return_mean_submission=result.annualized_retail_edge_return_mean_submission,
+        annualized_arb_loss_return_mean_submission=result.annualized_arb_loss_return_mean_submission,
+        retail_markout_bps_mean_submission=result.retail_markout_bps_mean_submission,
+        arb_markout_bps_mean_submission=result.arb_markout_bps_mean_submission,
+        initial_value_mean=result.initial_value_mean,
+        episode_seconds_mean=result.episode_seconds_mean,
         metadata=result.metadata,
     )
 
@@ -457,6 +483,7 @@ def random_search_with_validation(
             fixed_validation_seeds,
             normalizer_fee=config.normalizer_fee,
             evaluator_kind=config.evaluator_kind,
+            submission_liquidity_fraction=config.submission_liquidity_fraction,
         )
         fresh_validation_seeds_current = _sample_fresh_validation_seeds(
             fresh_rng,
@@ -470,6 +497,7 @@ def random_search_with_validation(
                 fresh_validation_seeds_current,
                 normalizer_fee=config.normalizer_fee,
                 evaluator_kind=config.evaluator_kind,
+                submission_liquidity_fraction=config.submission_liquidity_fraction,
             )
             if fresh_validation_seeds_current
             else None
@@ -491,6 +519,7 @@ def random_search_with_validation(
         fixed_validation_seeds,
         normalizer_fee=config.normalizer_fee,
         evaluator_kind=config.evaluator_kind,
+        submission_liquidity_fraction=config.submission_liquidity_fraction,
         top_k=rerank_top_k,
     )
     return SearchStudyResult(
@@ -549,6 +578,7 @@ def cross_entropy_search_with_validation(
             fixed_validation_seeds,
             normalizer_fee=config.normalizer_fee,
             evaluator_kind=config.evaluator_kind,
+            submission_liquidity_fraction=config.submission_liquidity_fraction,
         )
         fresh_validation_seeds_current = _sample_fresh_validation_seeds(
             fresh_rng,
@@ -562,6 +592,7 @@ def cross_entropy_search_with_validation(
                 fresh_validation_seeds_current,
                 normalizer_fee=config.normalizer_fee,
                 evaluator_kind=config.evaluator_kind,
+                submission_liquidity_fraction=config.submission_liquidity_fraction,
             )
             if fresh_validation_seeds_current
             else None
@@ -583,6 +614,7 @@ def cross_entropy_search_with_validation(
         fixed_validation_seeds,
         normalizer_fee=config.normalizer_fee,
         evaluator_kind=config.evaluator_kind,
+        submission_liquidity_fraction=config.submission_liquidity_fraction,
         top_k=rerank_top_k,
     )
     return SearchStudyResult(
@@ -658,6 +690,7 @@ def _rerank_candidates(
     *,
     normalizer_fee: float,
     evaluator_kind: str,
+    submission_liquidity_fraction: float,
     top_k: int,
 ) -> list[CandidateEvaluation]:
     unique = _dedupe_candidates(candidates)[:top_k]
@@ -667,6 +700,7 @@ def _rerank_candidates(
             validation_seeds,
             normalizer_fee=normalizer_fee,
             evaluator_kind=evaluator_kind,
+            submission_liquidity_fraction=submission_liquidity_fraction,
         )
         for candidate in unique
     ]
