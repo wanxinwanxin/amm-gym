@@ -166,3 +166,55 @@ class EmpiricalImpactRetailTrader:
             float(reference_amm.bid_fee),
             float(reference_amm.ask_fee),
         )
+
+
+class EmpiricalUSDSizeRetailTrader:
+    """Retail generator that samples USD order sizes directly from a quantile CSV."""
+
+    def __init__(
+        self,
+        arrival_rate: float,
+        usd_quantiles_path: str | Path,
+        *,
+        buy_prob: float = 0.5,
+        seed: int | None = None,
+    ) -> None:
+        self.arrival_rate = float(arrival_rate)
+        self.usd_quantiles_path = Path(usd_quantiles_path)
+        self.buy_prob = float(buy_prob)
+        self.pct_grid, self.size_values = self._load_percentiles(self.usd_quantiles_path)
+        self.rng = np.random.default_rng(seed)
+
+    @staticmethod
+    def _load_percentiles(path: Path) -> tuple[np.ndarray, np.ndarray]:
+        rows = np.genfromtxt(path, delimiter=",", names=True, dtype=float)
+        pct_grid = np.asarray(rows["pct"], dtype=float)
+        size_values = np.asarray(rows["size_usd"], dtype=float)
+        return pct_grid, size_values
+
+    def generate_orders(
+        self,
+        *,
+        fair_price: float,
+        reference_amm: _ReferenceAMM | None = None,
+    ) -> list["RetailOrder"]:
+        from arena_eval.exact_simple_amm.simulator import RetailOrder
+
+        del fair_price, reference_amm  # not needed for USD-size sampling
+        if self.arrival_rate <= 0.0:
+            return []
+        n_orders = int(self.rng.poisson(self.arrival_rate))
+        if n_orders == 0:
+            return []
+        usd_sizes = np.interp(
+            self.rng.random(size=n_orders) * 100.0,
+            self.pct_grid,
+            self.size_values,
+        )
+        orders: list[RetailOrder] = []
+        for usd_size in usd_sizes.tolist():
+            if usd_size <= 0.0:
+                continue
+            side = "buy" if float(self.rng.random()) < self.buy_prob else "sell"
+            orders.append(RetailOrder(side=side, size=float(usd_size)))
+        return orders

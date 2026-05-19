@@ -11,7 +11,7 @@ import numpy as np
 
 from arena_eval.core.types import BatchResult, SimulationResult, TradeInfo
 from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
-from arena_eval.exact_simple_amm.dynamics import EmpiricalImpactRetailTrader, RegimeSwitchingReturnProcess
+from arena_eval.exact_simple_amm.dynamics import EmpiricalImpactRetailTrader, EmpiricalUSDSizeRetailTrader, RegimeSwitchingReturnProcess
 from arena_eval.exact_simple_amm.strategies import ExactSimpleAMMStrategy, FixedFeeStrategy
 
 
@@ -604,6 +604,15 @@ class ExactSimpleAMMSimulator:
                 scale_mode=self.config.retail_impact_scale_mode,
                 initial_x=initial_x,
                 initial_y=initial_y,
+                seed=self.seed + 1,
+            )
+        if self.config.retail_flow_kind == "empirical_usd_size":
+            if not self.config.retail_usd_quantiles_path:
+                raise ValueError("empirical_usd_size requires retail_usd_quantiles_path")
+            return EmpiricalUSDSizeRetailTrader(
+                self.config.retail_arrival_rate,
+                self.config.retail_usd_quantiles_path,
+                buy_prob=self.config.retail_buy_prob,
                 seed=self.seed + 1,
             )
         raise ValueError(f"Unsupported retail_flow_kind: {self.config.retail_flow_kind}")

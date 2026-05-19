@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
-from arena_eval.diff_simple_amm.types import RealisticTape
+from arena_eval.diff_simple_amm.types import RealisticTape, RealisticUSDSizeTape
 
 
 @lru_cache(maxsize=8)
@@ -124,4 +124,86 @@ def build_realistic_tape(*, config: ExactSimpleAMMConfig, seed: int) -> Realisti
         max_orders_per_step=max_orders_per_step,
         smooth_arrival_uniforms=smooth_arrival_uniforms,
         smooth_impact_percentiles=smooth_impact_percentiles,
+    )
+
+
+@lru_cache(maxsize=8)
+def _load_usd_quantiles(path: str) -> tuple[np.ndarray, np.ndarray]:
+    rows = np.genfromtxt(Path(path), delimiter=",", names=True, dtype=float)
+    pct_grid = np.asarray(rows["pct"], dtype=float)
+    size_values = np.asarray(rows["size_usd"], dtype=float)
+    return (pct_grid, size_values)
+
+
+def build_realistic_usd_size_tape(*, config: ExactSimpleAMMConfig, seed: int) -> RealisticUSDSizeTape:
+    """Materialize explicit realistic-mode randomness with direct USD order sizes."""
+
+    if not config.regime_invcdf_path or not config.regime_transition_path or not config.retail_usd_quantiles_path:
+        raise ValueError("realistic USD-size dynamics require regime and USD quantile CSV paths")
+
+    regime_pct_grid, regime_invcdf = _load_regime_invcdf(config.regime_invcdf_path)
+    transition = _load_transition_matrix(config.regime_transition_path)
+    usd_pct_grid, usd_size_values = _load_usd_quantiles(config.retail_usd_quantiles_path)
+
+    price_rng = np.random.default_rng(seed)
+    retail_rng = np.random.default_rng(seed + 1)
+    smooth_rng = np.random.default_rng(seed + 101)
+
+    n_regimes = int(transition.shape[0])
+    regime = int(min(max(int(config.regime_start), 1), n_regimes))
+    log_returns: list[float] = []
+    regimes: list[int] = []
+    return_percentiles: list[float] = []
+
+    order_counts: list[int] = []
+    order_usd_sizes: list[tuple[float, ...]] = []
+    order_side_uniforms: list[tuple[float, ...]] = []
+    max_orders_per_step = 0
+
+    for _ in range(config.n_steps):
+        transition_row = transition[regime - 1]
+        regime = int(price_rng.choice(len(transition_row), p=transition_row)) + 1
+        draw_pct = float(price_rng.random() * 100.0)
+        log_return = float(np.interp(draw_pct, regime_pct_grid, regime_invcdf[:, regime - 1]))
+        regimes.append(regime)
+        return_percentiles.append(draw_pct)
+        log_returns.append(log_return)
+
+        count = int(retail_rng.poisson(config.retail_arrival_rate))
+        order_counts.append(count)
+        if count <= 0:
+            order_usd_sizes.append(())
+            order_side_uniforms.append(())
+            continue
+        max_orders_per_step = max(max_orders_per_step, count)
+        draw_pcts = retail_rng.random(size=count) * 100.0
+        sizes = np.interp(draw_pcts, usd_pct_grid, usd_size_values)
+        order_usd_sizes.append(tuple(float(v) for v in sizes))
+        order_side_uniforms.append(tuple(float(v) for v in retail_rng.random(size=count)))
+
+    width = max(max_orders_per_step, 1)
+    smooth_arrival_uniforms = tuple(
+        tuple(float(v) for v in smooth_rng.random(size=width))
+        for _ in range(config.n_steps)
+    )
+    smooth_size_percentiles = tuple(
+        tuple(float(v) for v in (smooth_rng.random(size=width) * 100.0))
+        for _ in range(config.n_steps)
+    )
+    smooth_side_uniforms = tuple(
+        tuple(float(v) for v in smooth_rng.random(size=width))
+        for _ in range(config.n_steps)
+    )
+
+    return RealisticUSDSizeTape(
+        log_returns=tuple(log_returns),
+        regimes=tuple(regimes),
+        return_percentiles=tuple(return_percentiles),
+        order_counts=tuple(order_counts),
+        order_usd_sizes=tuple(order_usd_sizes),
+        order_side_uniforms=tuple(order_side_uniforms),
+        max_orders_per_step=max_orders_per_step,
+        smooth_arrival_uniforms=smooth_arrival_uniforms,
+        smooth_size_percentiles=smooth_size_percentiles,
+        smooth_side_uniforms=smooth_side_uniforms,
     )

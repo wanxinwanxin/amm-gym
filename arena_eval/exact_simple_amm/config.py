@@ -13,7 +13,10 @@ ANALYSIS_DIR = ROOT / "analysis" / "weth_usdc_90d"
 DEFAULT_REGIME_INVCDF_PATH = ANALYSIS_DIR / "regimes_invcdf.csv"
 DEFAULT_REGIME_TRANSITION_PATH = ANALYSIS_DIR / "regimes_transition_matrix.csv"
 DEFAULT_RETAIL_IMPACT_PERCENTILES_PATH = ANALYSIS_DIR / "percentiles.csv"
+DEFAULT_RETAIL_USD_QUANTILES_PATH = ANALYSIS_DIR / "parent_order_usd_quantiles.csv"
 EMPIRICAL_ROUTER_ARRIVAL_RATE = 186_085 / 645_123
+EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE = 1_294_178 / 1_303_200
+EMPIRICAL_PARENT_ORDER_BUY_PROB = 0.4842
 
 @dataclass(frozen=True)
 class ExactSimpleAMMConfig:
@@ -40,6 +43,7 @@ class ExactSimpleAMMConfig:
     retail_impact_column: str = "router_impact_log"
     retail_impact_reference_venue: str = "normalizer"
     retail_impact_scale_mode: str = "current_state"
+    retail_usd_quantiles_path: str | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.submission_liquidity_fraction) or self.submission_liquidity_fraction <= 0.0:
@@ -79,7 +83,22 @@ class ExactSimpleAMMConfig:
         )
 
     @classmethod
-    def real_data_from_seed(cls, seed: int) -> "ExactSimpleAMMConfig":
+    def real_data_from_seed(
+        cls,
+        seed: int,
+        retail_mode: str = "empirical_impact",
+    ) -> "ExactSimpleAMMConfig":
+        if retail_mode == "empirical_usd_size":
+            return cls(
+                evaluator_kind="real_data",
+                price_process_kind="regime_switching",
+                retail_flow_kind="empirical_usd_size",
+                retail_arrival_rate=float(EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE),
+                retail_buy_prob=EMPIRICAL_PARENT_ORDER_BUY_PROB,
+                regime_invcdf_path=str(DEFAULT_REGIME_INVCDF_PATH),
+                regime_transition_path=str(DEFAULT_REGIME_TRANSITION_PATH),
+                retail_usd_quantiles_path=str(DEFAULT_RETAIL_USD_QUANTILES_PATH),
+            )
         return cls(
             evaluator_kind="real_data",
             price_process_kind="regime_switching",

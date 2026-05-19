@@ -10,7 +10,7 @@ except ImportError:  # pragma: no cover - exercised only when jax is absent
     jnp = None
 
 from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
-from arena_eval.diff_simple_amm.types import AMMState, ChallengeTape, RealisticTape, RetailOrder
+from arena_eval.diff_simple_amm.types import AMMState, ChallengeTape, RealisticTape, RealisticUSDSizeTape, RetailOrder
 
 
 def decode_challenge_orders(
@@ -125,3 +125,22 @@ def realistic_tape_to_smooth_arrays(tape: RealisticTape) -> dict[str, object]:
         "impact_percentiles": _pad_rows(impact_percentiles, width=width, fill=50.0),
         "width": width,
     }
+
+
+def decode_realistic_usd_size_orders(
+    *,
+    config: ExactSimpleAMMConfig,
+    tape: RealisticUSDSizeTape,
+    step: int,
+) -> tuple[RetailOrder, ...]:
+    """Decode one step of retail orders from a RealisticUSDSizeTape."""
+
+    if step >= len(tape.order_usd_sizes):
+        return ()
+    orders: list[RetailOrder] = []
+    for usd_size, side_u in zip(tape.order_usd_sizes[step], tape.order_side_uniforms[step]):
+        if usd_size <= 0:
+            continue
+        side = "buy" if side_u < config.retail_buy_prob else "sell"
+        orders.append(RetailOrder(side=side, size=float(usd_size)))
+    return tuple(orders)

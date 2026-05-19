@@ -49,6 +49,22 @@ class RealisticTape:
 
 
 @dataclass(frozen=True)
+class RealisticUSDSizeTape:
+    """Exogenous realistic-mode randomness with direct USD order sizes."""
+
+    log_returns: tuple[float, ...]
+    regimes: tuple[int, ...]
+    return_percentiles: tuple[float, ...]
+    order_counts: tuple[int, ...]
+    order_usd_sizes: tuple[tuple[float, ...], ...]
+    order_side_uniforms: tuple[tuple[float, ...], ...]
+    max_orders_per_step: int
+    smooth_arrival_uniforms: tuple[tuple[float, ...], ...] = ()
+    smooth_size_percentiles: tuple[tuple[float, ...], ...] = ()
+    smooth_side_uniforms: tuple[tuple[float, ...], ...] = ()
+
+
+@dataclass(frozen=True)
 class RetailOrder:
     """Retail order decoded from an explicit challenge tape."""
 
