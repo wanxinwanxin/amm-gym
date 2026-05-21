@@ -146,6 +146,37 @@ def test_check_done_criteria_helper() -> None:
     assert not s2["monotone_ma_second_half"]
 
 
+def test_train_full_run_meets_all_done_criteria(tmp_path: Path) -> None:
+    """End-to-end 200-step training run satisfies all four DONE criteria.
+
+    This is the canonical validation that back-prop works on the tape-smooth
+    simulator: final_loss <= 0.8*initial_loss, 20-step MA monotone over the
+    second half, and gradients finite-and-nonzero throughout.
+    """
+    plot = tmp_path / "curve.png"
+    json_path = tmp_path / "curve.json"
+    summary = train(
+        seeds=DEFAULT_SEEDS,
+        steps=200,
+        lr=5e-3,
+        lr_min_frac=0.02,
+        n_steps=64,
+        plot_path=plot,
+        json_path=json_path,
+        verbose=False,
+    )
+    assert summary["twenty_percent_reduction"], (
+        f"Loss reduction below 20%: {summary['initial_loss']:+.4e} -> "
+        f"{summary['final_loss']:+.4e}"
+    )
+    assert summary["monotone_ma_second_half"], (
+        f"MA not monotone in 2nd half (max upward step: {summary['ma_max_up_step']:.4e}, "
+        f"tolerance: {summary['ma_tolerance']:.4e})"
+    )
+    assert summary["gradients_all_finite"], "non-finite gradient detected"
+    assert summary["gradients_all_positive"], "zero gradient detected"
+
+
 def test_initial_params_is_finite() -> None:
     p = initial_params()
     assert p.dtype == jnp.float64
