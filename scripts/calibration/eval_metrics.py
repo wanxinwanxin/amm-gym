@@ -129,9 +129,11 @@ def residuals(metrics: dict[str, float], targets: dict[str, float]) -> dict[str,
 
 
 TARGETS = {
-    "T1": 0.337330,  # arb 5bp share
-    "T2": 0.782049,  # retail 5bp share
-    "T3": 3.637,     # markout bps
+    "T1": 0.337330,  # arb 5bp share (USD-weighted, 7d BigQuery 2026-05-14..2026-05-20)
+    "T2": 0.782049,  # retail 5bp share (USD-weighted, same window)
+    "T3": -1.05,     # USD-volume-weighted next-block LP markout bps (same window).
+                     # Revised 2026-05-21 from prior +3.637 (which was a single-day
+                     # simple per-swap average, dominated by small retail swaps).
 }
 
 CALIB_SEEDS = (42, 43, 44, 45, 46)
