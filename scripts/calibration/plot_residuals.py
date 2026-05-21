@@ -34,7 +34,14 @@ def main() -> None:
     r1 = [c["final_residuals"]["T1_arb_5bp_share"] for c in cycles]
     r2 = [c["final_residuals"]["T2_retail_5bp_share"] for c in cycles]
     r3 = [c["final_residuals"]["T3_markout_bps"] for c in cycles]
-    losses = [c["scipy_result"]["fun"] for c in cycles]
+    # Compute calibration-set loss consistently from final_residuals so cycle-6
+    # (DE search) is comparable to cycles 1-5.
+    losses = [
+        c["final_residuals"]["T1_arb_5bp_share"] ** 2
+        + c["final_residuals"]["T2_retail_5bp_share"] ** 2
+        + c["final_residuals"]["T3_markout_bps"] ** 2
+        for c in cycles
+    ]
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
