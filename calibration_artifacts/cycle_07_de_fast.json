@@ -1,0 +1,23 @@
+{
+  "best_params": {
+    "submission_depth_y": 183772068.5409296,
+    "normalizer_fee": 0.042518415426448776,
+    "normalizer_depth_y": 219830363742.20233
+  },
+  "fast_de_loss_3seed": 0.04781452868887642,
+  "full_5seed_loss": 11.279728591959124,
+  "calib_residuals": {
+    "T1_arb_5bp_share": -0.29314900529071763,
+    "T2_retail_5bp_share": 0.08433999948853599,
+    "T3_markout_bps": 2.214162246231851
+  },
+  "holdout_residuals": {
+    "T1_arb_5bp_share": 0.22757773189486186,
+    "T2_retail_5bp_share": 0.10263400899401173,
+    "T3_markout_bps": 2.4943614815514197
+  },
+  "max_calib_residual": 2.214162246231851,
+  "max_holdout_residual": 2.4943614815514197,
+  "elapsed_s": 275.6587917804718,
+  "nfev": 384
+}
