@@ -1147,9 +1147,9 @@ def _adaptive_metrics_challenge(
     return _build_metrics(final_carry, config)
 
 
-def _adaptive_metrics_realistic(
+def _adaptive_metrics_realistic_from_arrays(
     config: ExactSimpleAMMConfig,
-    tape: RealisticTape,
+    arrays: dict,
     *,
     initial_policy_state,
     initial_bid,
@@ -1157,7 +1157,13 @@ def _adaptive_metrics_realistic(
     after_event,
     params,
 ) -> dict:
-    arrays = realistic_tape_to_arrays(tape)
+    """Array-driven realistic rollout (no tape parsing inside).
+
+    `arrays` is the dict produced by `realistic_tape_to_arrays`. Splitting this
+    out lets us call the rollout under `vmap` with a stacked-over-seeds arrays
+    dict (each leaf has a leading batch dim), since the only seed-dependent
+    inputs are the arrays themselves.
+    """
     carry = _adaptive_initial_carry(
         config,
         initial_policy_state=initial_policy_state,
@@ -1243,14 +1249,39 @@ def _adaptive_metrics_realistic(
         }
         return next_carry, None
 
-    n_steps = int(arrays["n_steps"])
+    log_returns = arrays["log_returns"]
+    impact_logs = arrays["impact_logs"]
+    mask = arrays["mask"]
+    n_steps = log_returns.shape[0]
     step_indices = jnp.arange(n_steps, dtype=jnp.float64)
     final_carry, _ = jax.lax.scan(
         step_fn,
         carry,
-        (step_indices, arrays["log_returns"], arrays["impact_logs"], arrays["mask"]),
+        (step_indices, log_returns, impact_logs, mask),
     )
     return _build_metrics(final_carry, config)
+
+
+def _adaptive_metrics_realistic(
+    config: ExactSimpleAMMConfig,
+    tape: RealisticTape,
+    *,
+    initial_policy_state,
+    initial_bid,
+    initial_ask,
+    after_event,
+    params,
+) -> dict:
+    arrays = realistic_tape_to_arrays(tape)
+    return _adaptive_metrics_realistic_from_arrays(
+        config,
+        arrays,
+        initial_policy_state=initial_policy_state,
+        initial_bid=initial_bid,
+        initial_ask=initial_ask,
+        after_event=after_event,
+        params=params,
+    )
 
 
 # ----- public per-policy entry points -----
@@ -1310,3 +1341,108 @@ def compact_result(config, tape, params, *, seed: int = 0) -> DiffSimulationResu
 
 def piecewise_result(config, tape, params, *, seed: int = 0) -> DiffSimulationResult:
     return _build_result(piecewise_metrics(config, tape, params), seed)
+
+
+# ----- batched (vmap-friendly) realistic-mode entrypoints -----
+def _pad_across_seeds(per_seed_arrays: list[dict]) -> dict:
+    """Stack per-seed arrays into batched arrays, padding `impact_logs` / `mask`
+    on the width axis so all seeds share a common width.
+
+    Each input dict is the output of `realistic_tape_to_arrays`. All seeds must
+    share the same `n_steps`.
+    """
+    _require_jax()
+    n_steps_set = {int(a["log_returns"].shape[0]) for a in per_seed_arrays}
+    if len(n_steps_set) != 1:
+        raise ValueError(
+            f"Batched rollout requires identical n_steps across seeds, got {n_steps_set}"
+        )
+    max_width = max(int(a["impact_logs"].shape[1]) for a in per_seed_arrays)
+
+    def pad_width(a, width):
+        cur = int(a.shape[1])
+        if cur == width:
+            return a
+        pad = jnp.zeros((a.shape[0], width - cur), dtype=a.dtype)
+        return jnp.concatenate([a, pad], axis=1)
+
+    log_returns = jnp.stack([a["log_returns"] for a in per_seed_arrays], axis=0)
+    impact_logs = jnp.stack(
+        [pad_width(a["impact_logs"], max_width) for a in per_seed_arrays], axis=0
+    )
+    masks = jnp.stack(
+        [pad_width(a["mask"], max_width) for a in per_seed_arrays], axis=0
+    )
+    return {
+        "log_returns": log_returns,
+        "impact_logs": impact_logs,
+        "mask": masks,
+        "n_steps": int(log_returns.shape[1]),
+        "width": int(max_width),
+    }
+
+
+def realistic_tapes_to_batched_arrays(tapes: list[RealisticTape]) -> dict:
+    """Convert a list of RealisticTape into a single batched arrays dict."""
+    _require_jax()
+    per_seed = [realistic_tape_to_arrays(t) for t in tapes]
+    return _pad_across_seeds(per_seed)
+
+
+def compact_metrics_realistic_batched(config, batched_arrays, params) -> dict:
+    """Run the SubmissionCompact realistic rollout for K seeds in one vmap.
+
+    `batched_arrays` has shape (K, n_steps) for log_returns and (K, n_steps, W)
+    for impact_logs/mask (W = max width across seeds; padding rows have mask=0).
+    All seeds share the same static `config`.
+    """
+    _require_jax()
+    init_state = compact_initial_policy_state(
+        config.submission_initial_x, config.submission_initial_y
+    )
+    init_bid, init_ask = compact_initial_fees(params)
+
+    def single_seed(arr_one):
+        return _adaptive_metrics_realistic_from_arrays(
+            config,
+            arr_one,
+            initial_policy_state=init_state,
+            initial_bid=init_bid,
+            initial_ask=init_ask,
+            after_event=compact_after_event,
+            params=params,
+        )
+
+    return jax.vmap(single_seed)(
+        {
+            "log_returns": batched_arrays["log_returns"],
+            "impact_logs": batched_arrays["impact_logs"],
+            "mask": batched_arrays["mask"],
+        }
+    )
+
+
+def piecewise_metrics_realistic_batched(config, batched_arrays, params) -> dict:
+    """Run the Piecewise realistic rollout for K seeds in one vmap."""
+    _require_jax()
+    init_state = piecewise_initial_policy_state()
+    init_bid, init_ask = piecewise_initial_fees(params)
+
+    def single_seed(arr_one):
+        return _adaptive_metrics_realistic_from_arrays(
+            config,
+            arr_one,
+            initial_policy_state=init_state,
+            initial_bid=init_bid,
+            initial_ask=init_ask,
+            after_event=piecewise_after_event,
+            params=params,
+        )
+
+    return jax.vmap(single_seed)(
+        {
+            "log_returns": batched_arrays["log_returns"],
+            "impact_logs": batched_arrays["impact_logs"],
+            "mask": batched_arrays["mask"],
+        }
+    )
