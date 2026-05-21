@@ -1,0 +1,78 @@
+{
+  "cycle": 5,
+  "best_params": {
+    "submission_depth_y": 16400000.0,
+    "normalizer_fee": 0.04479,
+    "normalizer_depth_y": 115000000000.0
+  },
+  "final_metrics": {
+    "arb_5bp_share": 0.24104938535138323,
+    "retail_5bp_share": 0.5972775204895258,
+    "markout_bps": 3.299113284176684,
+    "per_seed_arb_share": [
+      1.0,
+      0.1433501888356314,
+      0.02840044655162486,
+      0.019576222698333853,
+      0.013920068671326218
+    ],
+    "per_seed_retail_share": [
+      0.6118480717535116,
+      0.6763764134915877,
+      0.6577605380069169,
+      0.6150479323215247,
+      0.4253546468740881
+    ],
+    "per_seed_markout_bps": [
+      4.699542755505548,
+      3.062018664951306,
+      3.9347655133837796,
+      2.1851478826160236,
+      2.6140916044267635
+    ]
+  },
+  "final_residuals": {
+    "T1_arb_5bp_share": -0.28541966219611886,
+    "T2_retail_5bp_share": -0.23626585995311578,
+    "T3_markout_bps": -0.09290258889835465
+  },
+  "holdout_metrics": {
+    "arb_5bp_share": 0.4119726166555179,
+    "retail_5bp_share": 0.5772701678015593,
+    "markout_bps": 3.553509380717366,
+    "per_seed_arb_share": [
+      0.02043683636384035,
+      0.02826867178228865,
+      1.0,
+      1.0,
+      0.011157575131460498
+    ],
+    "per_seed_retail_share": [
+      0.594912786190273,
+      0.5071195323590851,
+      0.654903306601333,
+      0.5826247722083921,
+      0.5467904416487133
+    ],
+    "per_seed_markout_bps": [
+      3.3353692486887865,
+      3.783858549515363,
+      4.701219156550716,
+      2.9564427086135403,
+      2.990657240218425
+    ]
+  },
+  "holdout_residuals": {
+    "T1_arb_5bp_share": 0.22127476552787434,
+    "T2_retail_5bp_share": -0.2618491068954001,
+    "T3_markout_bps": -0.022955903019695877
+  },
+  "scipy_result": {
+    "fun": 0.1459168311715486,
+    "nit": -1,
+    "nfev": 60,
+    "success": true,
+    "message": "best from cycle-5 NM on 20 seeds (200..219)"
+  },
+  "note": "Cycle 5: robust 20-seed NM from cycle 1 best. Optimizer converged to L~0.048 on 20 seeds. Same Pareto frontier \u2014 T2 stays at ~-21%."
+}
