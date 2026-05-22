@@ -5,14 +5,16 @@ branch via `git show` so we don't have to vendor the JSON / CSV onto the
 `html-cleanup` branch. Outputs land in `plots/`:
 
   1. `calibration_residuals_evolution.png` — residual evolution + loss across
-     the 8 calibration cycles.
+     calibration cycles 3-8 (post-T3-retarget).
   2. `calibration_residuals_final.png` — bar chart of the final 6 residuals
      (3 metrics × 2 seed sets) against the ±2% target band.
   3. `calibration_pool_flow_splits.png` — empirical T1/T2 sources: USD-volume
      splits of arb vs retail flow across 5bp and other-fee pools.
-  4. `calibration_markout_windows.png` — the +3.637 vs -1.05 retarget figure:
-     USD-weighted markout vs window length, overlaid with the prior single-day
-     reference line.
+
+The T3 retarget figure (USD-weighted markout vs window length) is sourced from
+`reports/markout_by_window.png`, which already exists on `main` and shows the
+simple-avg vs USD-weighted contrast more directly than a re-rendered version
+would.
 
 Run via:
 
@@ -75,13 +77,6 @@ def load_final() -> dict:
 
 def load_pool_flow_splits() -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(git_show("calibration_artifacts/pool_flow_splits.csv")))
-
-
-def load_markout_windows() -> pd.DataFrame:
-    df = pd.read_csv(io.BytesIO(git_show("reports/markout_windows.csv")))
-    df = df[~df["window_days"].astype(str).str.startswith("max=")].copy()
-    df["window_days"] = df["window_days"].astype(int)
-    return df.sort_values("window_days").reset_index(drop=True)
 
 
 def _apply_style(ax: plt.Axes) -> None:
@@ -267,62 +262,10 @@ def plot_pool_flow_splits() -> Path:
     return out
 
 
-def plot_markout_windows() -> Path:
-    df = load_markout_windows()
-    x = np.arange(len(df))
-
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.bar(
-        x, df["usd_weighted_next_bps"], 0.6,
-        color=COLOR_CALIB, edgecolor="white",
-        label="USD-weighted markout (bps)",
-    )
-
-    for i, v in enumerate(df["usd_weighted_next_bps"].values):
-        ax.annotate(
-            f"{v:+.2f}",
-            (x[i], v),
-            xytext=(0, 4 if v >= 0 else -12),
-            textcoords="offset points",
-            ha="center", fontsize=9, color="#1c603c",
-        )
-
-    ax.axhline(
-        3.637, color=COLOR_SIMPLE, lw=1.5, ls="--",
-        label="Prior figure: +3.637 bps (single-day simple avg)",
-    )
-    ax.axhline(
-        -1.05, color=COLOR_HOLDOUT, lw=1.5, ls=":",
-        label="Calibration target T3: -1.05 bps (7d USD-weighted)",
-    )
-    ax.axhline(0, color="#555", lw=0.7, alpha=0.6)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"{d}d" for d in df["window_days"]], fontsize=10)
-    ax.set_xlabel("Window length ending 2026-05-19", fontsize=11)
-    ax.set_ylabel("LP markout (bps)", fontsize=11)
-    ax.set_title(
-        "USD-weighted next-block markout vs window length — 5bp WETH/USDC",
-        fontsize=12, fontweight="bold",
-    )
-    ax.legend(fontsize=9, frameon=False, loc="upper center",
-              bbox_to_anchor=(0.5, -0.18), ncol=3)
-    ax.set_ylim(-2.5, 4.5)
-    _apply_style(ax)
-
-    fig.tight_layout()
-    out = PLOTS / "calibration_markout_windows.png"
-    fig.savefig(out, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-    print(f"saved {out}")
-    return out
-
-
 def main() -> None:
     plot_residual_evolution()
     plot_final_residuals()
     plot_pool_flow_splits()
-    plot_markout_windows()
 
 
 if __name__ == "__main__":
