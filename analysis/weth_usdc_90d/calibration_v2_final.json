@@ -1,0 +1,298 @@
+{
+  "framework": "fit V2 (\u03c6, depth) of the 'other pool' from empirical non-5bp impact cloud; validate on the 5bp pool that was NEVER used in the fit",
+  "submission_pool_frozen": {
+    "fee": 0.0005,
+    "depth_y": 212157626.44,
+    "pool": "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640 (Uniswap V3 5bp WETH/USDC)"
+  },
+  "targets_realworld_5bp": {
+    "arb_volume_split_5bp_real": 0.33733,
+    "retail_volume_split_5bp_real": 0.782049,
+    "markout_5bp_real_bps": -1.05
+  },
+  "seeds_calibration": [
+    42,
+    43,
+    44,
+    45,
+    46
+  ],
+  "seeds_holdout": [
+    100,
+    101,
+    102,
+    103,
+    104
+  ],
+  "n_steps": 5000,
+  "plan_a": {
+    "plan": "Plan A",
+    "phi": 0.0,
+    "depth_usdc": 100000000000.0,
+    "calibration": {
+      "arb_share": 0.0008634817908355055,
+      "retail_share": 0.00032923384027865477,
+      "markout_bps": -16.714045746745846,
+      "arb_share_std": 0.00010545119554029967,
+      "retail_share_std": 0.00010393427054416698,
+      "markout_bps_std": 8.396555534932611,
+      "per_seed": [
+        {
+          "seed": 42,
+          "arb_share": 0.0006674475058276605,
+          "retail_share": 0.000166368429766497,
+          "markout_bps": -3.930320757099792,
+          "arb_vol_sub": 32443233.8017501,
+          "arb_vol_norm": 48575475019.66336,
+          "retail_vol_sub": 10737.050320072696,
+          "retail_vol_norm": 64527050.16773844,
+          "edge_sub": -12755.451529020302
+        },
+        {
+          "seed": 43,
+          "arb_share": 0.0009065766933796991,
+          "retail_share": 0.0003389978815846989,
+          "markout_bps": -18.176601376070202,
+          "arb_vol_sub": 70556617.50387451,
+          "arb_vol_norm": 77756965333.05598,
+          "retail_vol_sub": 21607.921719361893,
+          "retail_vol_norm": 63718972.45699057,
+          "edge_sub": -128287.22693914424
+        },
+        {
+          "seed": 44,
+          "arb_share": 0.0008462789305743363,
+          "retail_share": 0.0002722102607760824,
+          "markout_bps": -11.254960689924554,
+          "arb_vol_sub": 54868912.50953695,
+          "arb_vol_norm": 64780625068.53471,
+          "retail_vol_sub": 14662.555300183923,
+          "retail_vol_norm": 53850152.30649227,
+          "edge_sub": -61771.24798772654
+        },
+        {
+          "seed": 45,
+          "arb_share": 0.0009650306532397102,
+          "retail_share": 0.00040217740377334585,
+          "markout_bps": -22.244282059965325,
+          "arb_vol_sub": 71538920.60325302,
+          "arb_vol_norm": 74059702779.42905,
+          "retail_vol_sub": 22764.115431382816,
+          "retail_vol_norm": 56579409.99431033,
+          "edge_sub": -159183.82995687262
+        },
+        {
+          "seed": 46,
+          "arb_share": 0.0009320751711561212,
+          "retail_share": 0.00046641522549264964,
+          "markout_bps": -27.96406385066937,
+          "arb_vol_sub": 69170773.39467165,
+          "arb_vol_norm": 74142411656.02899,
+          "retail_vol_sub": 44578.33993699143,
+          "retail_vol_norm": 95531932.67534065,
+          "edge_sub": -193554.2515353135
+        }
+      ]
+    },
+    "holdout": {
+      "arb_share": 0.0008308794006492466,
+      "retail_share": 0.00041807583028285577,
+      "markout_bps": -20.35261843144719,
+      "arb_share_std": 0.0001022284419628934,
+      "retail_share_std": 4.039301927505428e-05,
+      "markout_bps_std": 10.085696723441123,
+      "per_seed": [
+        {
+          "seed": 100,
+          "arb_share": 0.0008828321272398022,
+          "retail_share": 0.00042554234477875535,
+          "markout_bps": -23.84266601759387,
+          "arb_vol_sub": 56292235.95604396,
+          "arb_vol_norm": 63706946797.99609,
+          "retail_vol_sub": 27187.661671427908,
+          "retail_vol_norm": 63862251.321335316,
+          "edge_sub": -134280.52076205763
+        },
+        {
+          "seed": 101,
+          "arb_share": 0.0008081999298928966,
+          "retail_share": 0.0003475615025628685,
+          "markout_bps": -17.15659563372553,
+          "arb_vol_sub": 48849287.854844846,
+          "arb_vol_norm": 60393234468.96805,
+          "retail_vol_sub": 23346.60623951179,
+          "retail_vol_norm": 67149243.18681085,
+          "edge_sub": -83848.80270037038
+        },
+        {
+          "seed": 102,
+          "arb_share": 0.0006548189271634205,
+          "retail_share": 0.00042886621949888773,
+          "markout_bps": -3.0744190316210585,
+          "arb_vol_sub": 31129835.57319341,
+          "arb_vol_norm": 47508478874.33885,
+          "retail_vol_sub": 25787.28368553521,
+          "retail_vol_norm": 60103181.8751971,
+          "edge_sub": -9578.543985319668
+        },
+        {
+          "seed": 103,
+          "arb_share": 0.0009645610413711837,
+          "retail_share": 0.00047291089260212725,
+          "markout_bps": -24.184012119584107,
+          "arb_vol_sub": 74752375.83992459,
+          "arb_vol_norm": 77424102163.89914,
+          "retail_vol_sub": 29547.05233727838,
+          "retail_vol_norm": 62449564.3394511,
+          "edge_sub": -180852.6929552265
+        },
+        {
+          "seed": 104,
+          "arb_share": 0.0008439849775789299,
+          "retail_share": 0.00041549819197164007,
+          "markout_bps": -33.505399354711386,
+          "arb_vol_sub": 49516360.369121194,
+          "arb_vol_norm": 58620201329.5887,
+          "retail_vol_sub": 28283.622087158397,
+          "retail_vol_norm": 68043305.21671313,
+          "edge_sub": -166001.30828124378
+        }
+      ]
+    }
+  },
+  "plan_b": {
+    "plan": "Plan B",
+    "phi": 0.0,
+    "depth_usdc": 100000000000.0,
+    "calibration": {
+      "arb_share": 0.0008634817908355055,
+      "retail_share": 0.00032923384027865477,
+      "markout_bps": -16.714045746745846,
+      "arb_share_std": 0.00010545119554029967,
+      "retail_share_std": 0.00010393427054416698,
+      "markout_bps_std": 8.396555534932611,
+      "per_seed": [
+        {
+          "seed": 42,
+          "arb_share": 0.0006674475058276605,
+          "retail_share": 0.000166368429766497,
+          "markout_bps": -3.930320757099792,
+          "arb_vol_sub": 32443233.8017501,
+          "arb_vol_norm": 48575475019.66336,
+          "retail_vol_sub": 10737.050320072696,
+          "retail_vol_norm": 64527050.16773844,
+          "edge_sub": -12755.451529020302
+        },
+        {
+          "seed": 43,
+          "arb_share": 0.0009065766933796991,
+          "retail_share": 0.0003389978815846989,
+          "markout_bps": -18.176601376070202,
+          "arb_vol_sub": 70556617.50387451,
+          "arb_vol_norm": 77756965333.05598,
+          "retail_vol_sub": 21607.921719361893,
+          "retail_vol_norm": 63718972.45699057,
+          "edge_sub": -128287.22693914424
+        },
+        {
+          "seed": 44,
+          "arb_share": 0.0008462789305743363,
+          "retail_share": 0.0002722102607760824,
+          "markout_bps": -11.254960689924554,
+          "arb_vol_sub": 54868912.50953695,
+          "arb_vol_norm": 64780625068.53471,
+          "retail_vol_sub": 14662.555300183923,
+          "retail_vol_norm": 53850152.30649227,
+          "edge_sub": -61771.24798772654
+        },
+        {
+          "seed": 45,
+          "arb_share": 0.0009650306532397102,
+          "retail_share": 0.00040217740377334585,
+          "markout_bps": -22.244282059965325,
+          "arb_vol_sub": 71538920.60325302,
+          "arb_vol_norm": 74059702779.42905,
+          "retail_vol_sub": 22764.115431382816,
+          "retail_vol_norm": 56579409.99431033,
+          "edge_sub": -159183.82995687262
+        },
+        {
+          "seed": 46,
+          "arb_share": 0.0009320751711561212,
+          "retail_share": 0.00046641522549264964,
+          "markout_bps": -27.96406385066937,
+          "arb_vol_sub": 69170773.39467165,
+          "arb_vol_norm": 74142411656.02899,
+          "retail_vol_sub": 44578.33993699143,
+          "retail_vol_norm": 95531932.67534065,
+          "edge_sub": -193554.2515353135
+        }
+      ]
+    },
+    "holdout": {
+      "arb_share": 0.0008308794006492466,
+      "retail_share": 0.00041807583028285577,
+      "markout_bps": -20.35261843144719,
+      "arb_share_std": 0.0001022284419628934,
+      "retail_share_std": 4.039301927505428e-05,
+      "markout_bps_std": 10.085696723441123,
+      "per_seed": [
+        {
+          "seed": 100,
+          "arb_share": 0.0008828321272398022,
+          "retail_share": 0.00042554234477875535,
+          "markout_bps": -23.84266601759387,
+          "arb_vol_sub": 56292235.95604396,
+          "arb_vol_norm": 63706946797.99609,
+          "retail_vol_sub": 27187.661671427908,
+          "retail_vol_norm": 63862251.321335316,
+          "edge_sub": -134280.52076205763
+        },
+        {
+          "seed": 101,
+          "arb_share": 0.0008081999298928966,
+          "retail_share": 0.0003475615025628685,
+          "markout_bps": -17.15659563372553,
+          "arb_vol_sub": 48849287.854844846,
+          "arb_vol_norm": 60393234468.96805,
+          "retail_vol_sub": 23346.60623951179,
+          "retail_vol_norm": 67149243.18681085,
+          "edge_sub": -83848.80270037038
+        },
+        {
+          "seed": 102,
+          "arb_share": 0.0006548189271634205,
+          "retail_share": 0.00042886621949888773,
+          "markout_bps": -3.0744190316210585,
+          "arb_vol_sub": 31129835.57319341,
+          "arb_vol_norm": 47508478874.33885,
+          "retail_vol_sub": 25787.28368553521,
+          "retail_vol_norm": 60103181.8751971,
+          "edge_sub": -9578.543985319668
+        },
+        {
+          "seed": 103,
+          "arb_share": 0.0009645610413711837,
+          "retail_share": 0.00047291089260212725,
+          "markout_bps": -24.184012119584107,
+          "arb_vol_sub": 74752375.83992459,
+          "arb_vol_norm": 77424102163.89914,
+          "retail_vol_sub": 29547.05233727838,
+          "retail_vol_norm": 62449564.3394511,
+          "edge_sub": -180852.6929552265
+        },
+        {
+          "seed": 104,
+          "arb_share": 0.0008439849775789299,
+          "retail_share": 0.00041549819197164007,
+          "markout_bps": -33.505399354711386,
+          "arb_vol_sub": 49516360.369121194,
+          "arb_vol_norm": 58620201329.5887,
+          "retail_vol_sub": 28283.622087158397,
+          "retail_vol_norm": 68043305.21671313,
+          "edge_sub": -166001.30828124378
+        }
+      ]
+    }
+  }
+}
