@@ -627,7 +627,13 @@ def run_calibrated_sim(
     """Run full simulation with calibrated parameters.
 
     Collects per-trade markouts on the submission pool and aggregate metrics.
-    markout = LP profit per trade = edge / |volume| in bps.
+    Per-trade markout is computed against the **next block's** ``fair_price``
+    (the canonical "next-block mid" used by the on-chain ``markout_next_bps``
+    column in ``analysis/weth_usdc_90d/markout_5bp_pool_percentiles.csv`` and
+    by T3 in this calibration). Using the same-block ``fair_price`` would put
+    every tiny retail trade on the deterministic post-arb-spot fee boundary at
+    exactly +0 bps or +10 bps, producing two narrow spikes that don't exist in
+    the empirical data - see ``reports/markout_spike_investigation.md``.
     """
     per_trade_markouts_bps: list[float] = []
     total_sub_vol = 0.0
@@ -635,32 +641,42 @@ def run_calibrated_sim(
     total_retail_edge_sub = 0.0
     total_arb_loss_sub = 0.0
 
+    def trade_edge(amount_x: float, amount_y: float, trader_side: str, fair: float) -> float:
+        if trader_side == "sell_x":
+            # Retail sells X (buys Y), LP buys X
+            return amount_x * fair - amount_y
+        # Retail buys X (sells Y), LP sells X
+        return amount_y - amount_x * fair
+
     for seed in seeds:
         sim = _build_sim(
             normalizer_fee, normalizer_depth_y,
             submission_depth_y, submission_fee, n_steps, seed,
         )
+        # Defer-by-one-block buffer so each retail trade is marked against the
+        # next block's fair_price (apples-to-apples with the empirical
+        # next-block markout). Trades from the last block of each seed have no
+        # next block and are dropped (~0.03% of samples; negligible for the
+        # distribution overlay).
+        pending: list[tuple[float, float, str]] = []
         while not sim.done:
             step = sim.step_once()
             if collect_markouts:
+                # First, finalise any pending retail trades against this block's
+                # newly drawn fair_price.
+                new_fair = step["fair_price"]
+                for amount_x, amount_y, trader_side in pending:
+                    edge = trade_edge(amount_x, amount_y, trader_side, new_fair)
+                    if amount_y > 0:
+                        per_trade_markouts_bps.append(edge / amount_y * 10_000)
+                pending.clear()
+                # Buffer this block's retail submission trades for the next block.
                 for ev in step["trade_events"]:
                     if ev["source"] != "retail" or ev["venue"] != "submission":
                         continue
-                    # Per-trade LP markout: the LP took the other side.
-                    # For a retail buy (LP sells X): LP profits if price drops.
-                    # edge = amount_x * fair_price - amount_y (if amm buys x)
-                    #      = amount_y - amount_x * fair_price (if amm sells x)
-                    # markout_bps = edge / trade_volume_y * 10000
-                    fair = step["fair_price"]
-                    if ev["trader_side"] == "sell_x":
-                        # Retail sells X (buys Y), LP buys X
-                        edge = ev["amount_x"] * fair - ev["amount_y"]
-                    else:
-                        # Retail buys X (sells Y), LP sells X
-                        edge = ev["amount_y"] - ev["amount_x"] * fair
-                    vol_y = ev["amount_y"]
-                    if vol_y > 0:
-                        per_trade_markouts_bps.append(edge / vol_y * 10_000)
+                    pending.append(
+                        (float(ev["amount_x"]), float(ev["amount_y"]), str(ev["trader_side"]))
+                    )
 
         res = sim.result()
         total_sub_vol += res.retail_volume_submission_y
