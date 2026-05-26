@@ -1065,9 +1065,9 @@ def _route_one_order_with_policy(
     return oc2
 
 
-def _adaptive_metrics_challenge(
+def _adaptive_metrics_challenge_from_arrays(
     config: ExactSimpleAMMConfig,
-    tape: ChallengeTape,
+    arrays: dict,
     *,
     initial_policy_state,
     initial_bid,
@@ -1075,7 +1075,11 @@ def _adaptive_metrics_challenge(
     after_event,
     params,
 ) -> dict:
-    arrays = challenge_tape_to_arrays(tape)
+    """Array-driven challenge-mode rollout (no tape parsing inside).
+
+    Mirror of `_adaptive_metrics_realistic_from_arrays`: the only seed-dependent
+    inputs are arrays, so this is the function we vmap across seeds.
+    """
     carry = _adaptive_initial_carry(
         config,
         initial_policy_state=initial_policy_state,
@@ -1137,14 +1141,40 @@ def _adaptive_metrics_challenge(
         }
         return next_carry, None
 
-    n_steps = int(arrays["n_steps"])
+    gbm_normals = arrays["gbm_normals"]
+    n_steps = gbm_normals.shape[0]
     step_indices = jnp.arange(n_steps, dtype=jnp.float64)
     final_carry, _ = jax.lax.scan(
         step_fn,
         carry,
-        (step_indices, arrays["gbm_normals"], arrays["sizes"], arrays["sides"], arrays["mask"]),
+        (step_indices, gbm_normals, arrays["sizes"], arrays["sides"], arrays["mask"]),
     )
     return _build_metrics(final_carry, config)
+
+
+def _adaptive_metrics_challenge(
+    config: ExactSimpleAMMConfig,
+    tape: ChallengeTape,
+    *,
+    initial_policy_state,
+    initial_bid,
+    initial_ask,
+    after_event,
+    params,
+) -> dict:
+    arrays = challenge_tape_to_arrays(tape)
+    # `challenge_tape_to_arrays` returns the static `n_steps` as a Python int —
+    # drop it so the dict is JAX-clean (only array leaves).
+    arrays = {k: v for k, v in arrays.items() if k != "n_steps"}
+    return _adaptive_metrics_challenge_from_arrays(
+        config,
+        arrays,
+        initial_policy_state=initial_policy_state,
+        initial_bid=initial_bid,
+        initial_ask=initial_ask,
+        after_event=after_event,
+        params=params,
+    )
 
 
 def _adaptive_metrics_realistic_from_arrays(
@@ -1410,6 +1440,128 @@ def compact_metrics_realistic_batched(config, batched_arrays, params) -> dict:
             initial_bid=init_bid,
             initial_ask=init_ask,
             after_event=compact_after_event,
+            params=params,
+        )
+
+    return jax.vmap(single_seed)(
+        {
+            "log_returns": batched_arrays["log_returns"],
+            "impact_logs": batched_arrays["impact_logs"],
+            "mask": batched_arrays["mask"],
+        }
+    )
+
+
+def _pad_across_seeds_challenge(per_seed_arrays: list[dict]) -> dict:
+    """Stack per-seed challenge arrays into batched arrays, padding the
+    per-step order width axis so all seeds share a common width.
+    """
+    _require_jax()
+    n_steps_set = {int(a["gbm_normals"].shape[0]) for a in per_seed_arrays}
+    if len(n_steps_set) != 1:
+        raise ValueError(
+            f"Batched rollout requires identical n_steps across seeds, got {n_steps_set}"
+        )
+    max_width = max(int(a["sizes"].shape[1]) for a in per_seed_arrays)
+
+    def pad_width(a, width, fill=0.0):
+        cur = int(a.shape[1])
+        if cur == width:
+            return a
+        pad = jnp.full((a.shape[0], width - cur), fill, dtype=a.dtype)
+        return jnp.concatenate([a, pad], axis=1)
+
+    gbm_normals = jnp.stack([a["gbm_normals"] for a in per_seed_arrays], axis=0)
+    sizes = jnp.stack(
+        [pad_width(a["sizes"], max_width) for a in per_seed_arrays], axis=0
+    )
+    sides = jnp.stack(
+        [pad_width(a["sides"], max_width, fill=1.0) for a in per_seed_arrays], axis=0
+    )
+    masks = jnp.stack(
+        [pad_width(a["mask"], max_width) for a in per_seed_arrays], axis=0
+    )
+    return {
+        "gbm_normals": gbm_normals,
+        "sizes": sizes,
+        "sides": sides,
+        "mask": masks,
+        "n_steps": int(gbm_normals.shape[1]),
+        "width": int(max_width),
+    }
+
+
+def challenge_tapes_to_batched_arrays(tapes: list[ChallengeTape]) -> dict:
+    """Convert a list of ChallengeTape into a single batched arrays dict."""
+    _require_jax()
+    per_seed = []
+    for t in tapes:
+        a = challenge_tape_to_arrays(t)
+        per_seed.append({k: v for k, v in a.items() if k != "n_steps"})
+    return _pad_across_seeds_challenge(per_seed)
+
+
+def metrics_challenge_batched(
+    config,
+    batched_arrays,
+    *,
+    after_event,
+    params,
+    initial_policy_state,
+    initial_bid,
+    initial_ask,
+) -> dict:
+    """Run a generic-policy challenge-mode rollout for K seeds in one vmap.
+
+    `batched_arrays` has shape (K, n_steps) for gbm_normals and (K, n_steps, W)
+    for sizes/sides/mask. The policy is fully specified by `after_event`,
+    `params`, `initial_policy_state`, and (`initial_bid`, `initial_ask`) — none
+    of which depend on seed.
+    """
+    _require_jax()
+
+    def single_seed(arr_one):
+        return _adaptive_metrics_challenge_from_arrays(
+            config,
+            arr_one,
+            initial_policy_state=initial_policy_state,
+            initial_bid=initial_bid,
+            initial_ask=initial_ask,
+            after_event=after_event,
+            params=params,
+        )
+
+    return jax.vmap(single_seed)(
+        {
+            "gbm_normals": batched_arrays["gbm_normals"],
+            "sizes": batched_arrays["sizes"],
+            "sides": batched_arrays["sides"],
+            "mask": batched_arrays["mask"],
+        }
+    )
+
+
+def metrics_realistic_batched(
+    config,
+    batched_arrays,
+    *,
+    after_event,
+    params,
+    initial_policy_state,
+    initial_bid,
+    initial_ask,
+) -> dict:
+    """Generic-policy mirror of `compact_metrics_realistic_batched`."""
+    _require_jax()
+
+    def single_seed(arr_one):
+        return _adaptive_metrics_realistic_from_arrays(
+            config,
+            arr_one,
+            initial_policy_state=initial_policy_state,
+            initial_bid=initial_bid,
+            initial_ask=initial_ask,
+            after_event=after_event,
             params=params,
         )
 
