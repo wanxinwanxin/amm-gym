@@ -42,10 +42,13 @@ REAL_POOL_FEE = 0.0005
 REAL_VIRTUAL_USDC = 212_157_626.44
 
 # Held-out real-world targets (NOT used as optimization input).
+# T3 uses markout_15s per the project convention (LP profitability ⇒ 15s reference).
+# Value: USD-weighted markout_15s on the 5bp pool, all flow, 6 days
+# (2026-05-14..2026-05-19; 2026-05-20 has no markouts populated for the pool).
 TARGETS = {
     "arb_volume_split_5bp_real": 0.337330,
     "retail_volume_split_5bp_real": 0.782049,
-    "markout_5bp_real_bps": -1.05,
+    "markout_5bp_real_bps": -1.668,
 }
 
 SEEDS_CALIBRATION = (42, 43, 44, 45, 46)

@@ -8,7 +8,7 @@
   "targets_realworld_5bp": {
     "arb_volume_split_5bp_real": 0.33733,
     "retail_volume_split_5bp_real": 0.782049,
-    "markout_5bp_real_bps": -1.05
+    "markout_5bp_real_bps": -1.668
   },
   "seeds_calibration": [
     42,

@@ -456,24 +456,33 @@ REAL_VIRTUAL_USDC = 212_157_626.44
 REAL_VOLUME_SHARE_5BP = 0.311  # 5bp pool gets ~31% of total WETH/USDC volume
 REAL_FEE_SHARE_5BP = 0.155    # 5bp pool earns ~15.5% of total WETH/USDC fees
 
-# On-chain markout distribution on the 5bp WETH/USDC pool, per-swap (no USD-weighting).
-# markout_next = LP profit per swap in bps, benchmarked to next-block mid (Binance).
-# RETAIL-ONLY = router-routed txs (the same definition the simulator uses to filter
-# the sim distribution it produces). Aggregated over the 6 days of the calibration
-# window 2026-05-14..2026-05-19 (2026-05-20 has no markouts populated on the pool).
-# n_swaps = 8,963.
+# On-chain LP-profitability markout distribution on the 5bp WETH/USDC pool,
+# per-swap, RETAIL-ONLY (router-routed txs). Aggregated over 2026-05-14..2026-05-19
+# (6 days; 2026-05-20 has no markouts populated for the pool). n_swaps = 8,963.
+#
+# Reference convention (project-wide):
+#   - LP profitability      → markout_15s   (15-second post-trade mid)
+#   - Trader t-cost / spread → markout_next  (next-block mid, also `benchmark` at-block)
+# So OBSERVED_MARKOUT (consumed by `plot_markout_comparison`, the calibration overlay,
+# and `get_calibration_summary`) uses the 15s reference. The next-block values are
+# kept in OBSERVED_MARKOUT_NEXT_RETAIL below for trader-t-cost comparisons.
 #
 # The full per-swap-percentile curve lives in
-# `markout_5bp_pool_percentiles_retail.csv` (1001 quantile points) — this is what
-# `plot_markout_comparison` consumes.
+# `markout_5bp_pool_percentiles_retail.csv` (1001 quantile points × two columns).
 OBSERVED_MARKOUT = {
+    "avg_bps": 0.213, "std_bps": 5.428,
+    "p5": -7.042, "p25": -2.025, "p50": -0.080, "p75": 2.366, "p95": 9.142,
+}
+
+# Same sample, next-block reference — for trader-t-cost / spread comparisons.
+OBSERVED_MARKOUT_NEXT_RETAIL = {
     "avg_bps": 0.734, "std_bps": 3.547,
     "p5": -3.185, "p25": -0.911, "p50": 0.076, "p75": 1.310, "p95": 8.314,
 }
 
-# For reference — the all-flow (retail+arb) per-swap distribution on the same pool
-# (May 7 2026 snapshot, n=6328). Kept for historical comparison; the sim collects
-# retail-only so the calibration overlay should not use this.
+# Legacy — all-flow (retail+arb) per-swap markout_next, May 7 2026 snapshot (n=6328).
+# Kept for historical reference; the sim collects retail-only so the calibration
+# overlay no longer points here.
 OBSERVED_MARKOUT_ALLFLOW = {
     "avg_bps": 3.637, "std_bps": 4.456,
     "p5": -1.94, "p25": 0.25, "p50": 3.05, "p75": 6.93, "p95": 10.44,
@@ -782,8 +791,9 @@ def plot_markout_comparison(
     # Load observed percentile curve as pseudo-samples (uniformly spaced in probability).
     # Retail-only on the 5bp pool — same slice as the sim's `markouts_bps`
     # (filtered by source == 'retail', venue == 'submission').
+    # Uses markout_15s per the project convention (LP profitability ⇒ 15s reference).
     obs_df = pd.read_csv(ANALYSIS_DIR / "markout_5bp_pool_percentiles_retail.csv")
-    obs_vals = obs_df["markout_next_bps"].values
+    obs_vals = obs_df["markout_15s_bps"].values
 
     # Trim both to the same range for readability
     lo = min(np.percentile(markouts, trim_pct), np.percentile(obs_vals, trim_pct))
