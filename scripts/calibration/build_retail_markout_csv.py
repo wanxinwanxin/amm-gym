@@ -18,6 +18,7 @@ is also pulled for trader-t-cost contexts but is not the primary metric here.
 from __future__ import annotations
 
 import csv
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -26,31 +27,14 @@ from google.cloud import bigquery
 
 REPO = Path(__file__).resolve().parent.parent.parent
 ANALYSIS = REPO / "analysis" / "weth_usdc_90d"
+sys.path.insert(0, str(ANALYSIS))
+from router_cohorts import retail_router_addresses  # noqa: E402
+
 PER_SWAP_PATH = ANALYSIS / "markout_5bp_pool_retail.csv"
 SUMMARY_PATH = ANALYSIS / "markout_5bp_pool_summary_retail.csv"
 
 POOL_5BP = "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640"
-ROUTERS = [
-    "0xef1c6e67703c7bd7107eed8303fbe6ec2554bf6b",
-    "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad",
-    "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
-    "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-    "0xe592427a0aece92de3edee1f18e0157c05861564",
-    "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
-    "0x1111111254fb6c44bac0bed2854e76f90643097d",
-    "0x1111111254eeb25477b68fb85ed929f73a960582",
-    "0x111111125421ca6dc452d289314280a0f8842a65",
-    "0xdef1c0ded9bec7f1a1670819833240f027b25eff",
-    "0x0000000000001ff3684f28c67538d4d072c22734",
-    "0x9008d19f58aabd9ed0d60971565aa8510560ab41",
-    "0xdef171fe48cf0115b1d80b88dc8eab59176fee57",
-    "0x6a000f20005980200259b80c5102003040001068",
-    "0x6131b5fae19ea4f9d964eac0408e4408b66337b5",
-    "0x617dee16b86534a5d792a4d7a62fb491b544111e",
-    "0xbdb3ba9ffe392549e1f8658dd2630c141fdf47b6",
-    "0x51c72848c68a965f66fa7a88855f9f7784502a7f",
-    "0x881d40237659c251811cec9c364ef91dc08d300c",
-]
+ROUTERS = retail_router_addresses()
 
 DAYS = [
     "2026-05-14", "2026-05-15", "2026-05-16",
