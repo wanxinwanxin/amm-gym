@@ -57,8 +57,8 @@ def main() -> None:
         & (df["mode"]        == QUANT_MODE)
         & (df["side_group"]  == QUANT_SIDE)
     ][["pct", "size_usd"]].sort_values("pct").reset_index(drop=True)
-    if len(sel) != 1001:
-        print(f"WARN: expected 1001 quantile rows for ({QUANT_WINDOW},{QUANT_MODE},{QUANT_SIDE}), got {len(sel)}")
+    if len(sel) != 10001:
+        print(f"WARN: expected 10001 quantile rows for ({QUANT_WINDOW},{QUANT_MODE},{QUANT_SIDE}), got {len(sel)}")
     sel.to_csv(QUANT_CSV, index=False)
     print(f"wrote {QUANT_CSV}: {len(sel):,} quantile points "
           f"(window={QUANT_WINDOW}, mode={QUANT_MODE}, side={QUANT_SIDE})")

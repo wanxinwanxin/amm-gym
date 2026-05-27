@@ -19,7 +19,12 @@
 --
 -- Output:
 --   Long percentile table with duplicated diagnostics per window/mode/side_group.
---   pct is in [0, 100] at 0.1 percentile increments.
+--   pct is in [0, 100] at 0.01 percentile increments (10000-bucket approx.
+--   quantiles). The denser tail is necessary because the simulator uses
+--   linear interpolation between quantile points to sample order sizes,
+--   and the original 0.1-percentile grid had a single bin (p99.9 → p100)
+--   spanning ~$217K to ~$7M, which made the sim over-sample $1M+ trades by
+--   ~17×. Denser anchors at p99.91…p99.99 close that gap.
 
 WITH
 windows AS (
@@ -211,7 +216,7 @@ distributions AS (
     SUM(parent_usd) AS total_parent_usd,
     AVG(parent_usd) AS mean_parent_usd,
     AVG(IF(weth_usdc_leg_count = 1, 1.0, 0.0)) AS single_leg_share,
-    APPROX_QUANTILES(parent_usd, 1000) AS size_usd_quantiles
+    APPROX_QUANTILES(parent_usd, 10000) AS size_usd_quantiles
   FROM orders_with_side_groups
   GROUP BY window_name, start_date, end_date, mode, side_group
 ),
@@ -223,7 +228,7 @@ percentile_rows AS (
     DATE_DIFF(d.end_date, d.start_date, DAY) + 1 AS horizon_days,
     d.mode,
     d.side_group,
-    CAST(pct_index AS FLOAT64) / 10.0 AS pct,
+    CAST(pct_index AS FLOAT64) / 100.0 AS pct,
     size_usd,
     d.parent_count,
     d.total_parent_usd,
