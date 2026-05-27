@@ -445,461 +445,223 @@ def plot_retail_qq(
     return ax
 
 
+
+
 # ===================================================================
-# SECTION 3: Pool Liquidity & Fee Calibration
+# SECTION 3: Two-Pool Architecture & Impact-Curve Calibration
 # ===================================================================
 
-# Real Uniswap v3 WETH/USDC 0.05% pool parameters (from pool_stats_6m.csv)
+# Frozen submission-pool parameters: real Uniswap V3 5bp WETH/USDC on-chain
+# (sqrt_price_x96 × liquidity_L → virtual depths, May 2026).
 REAL_POOL_FEE = 0.0005  # 5 bps
 REAL_VIRTUAL_USDC = 212_157_626.44
-# On-chain calibration targets (all WETH/USDC pools, all protocols, avg of May 1+7 2026)
-REAL_VOLUME_SHARE_5BP = 0.311  # 5bp pool gets ~31% of total WETH/USDC volume
-REAL_FEE_SHARE_5BP = 0.155    # 5bp pool earns ~15.5% of total WETH/USDC fees
-
-# On-chain LP-profitability markout distribution on the 5bp WETH/USDC pool,
-# per-swap, RETAIL-ONLY (router-routed txs). Aggregated over 2026-05-14..2026-05-19
-# (6 days; 2026-05-20 has no markouts populated for the pool). n_swaps = 8,963.
-#
-# Reference convention (project-wide):
-#   - LP profitability      → markout_15s   (15-second post-trade mid)
-#   - Trader t-cost / spread → markout_next  (next-block mid, also `benchmark` at-block)
-# So OBSERVED_MARKOUT (consumed by `plot_markout_comparison`, the calibration overlay,
-# and `get_calibration_summary`) uses the 15s reference. The next-block values are
-# kept in OBSERVED_MARKOUT_NEXT_RETAIL below for trader-t-cost comparisons.
-#
-# The full per-swap-percentile curve lives in
-# `markout_5bp_pool_percentiles_retail.csv` (1001 quantile points × two columns).
-OBSERVED_MARKOUT = {
-    "avg_bps": 0.213, "std_bps": 5.428,
-    "p5": -7.042, "p25": -2.025, "p50": -0.080, "p75": 2.366, "p95": 9.142,
-}
-
-# Same sample, next-block reference — for trader-t-cost / spread comparisons.
-OBSERVED_MARKOUT_NEXT_RETAIL = {
-    "avg_bps": 0.734, "std_bps": 3.547,
-    "p5": -3.185, "p25": -0.911, "p50": 0.076, "p75": 1.310, "p95": 8.314,
-}
-
-# Legacy — all-flow (retail+arb) per-swap markout_next, May 7 2026 snapshot (n=6328).
-# Kept for historical reference; the sim collects retail-only so the calibration
-# overlay no longer points here.
-OBSERVED_MARKOUT_ALLFLOW = {
-    "avg_bps": 3.637, "std_bps": 4.456,
-    "p5": -1.94, "p25": 0.25, "p50": 3.05, "p75": 6.93, "p95": 10.44,
-}
 
 
-def _build_sim(
-    normalizer_fee: float,
-    normalizer_depth_y: float,
-    submission_depth_y: float = REAL_VIRTUAL_USDC,
-    submission_fee: float = REAL_POOL_FEE,
-    n_steps: int = 10_000,
-    seed: int = 42,
-):
-    """Create a configured ExactSimpleAMMSimulator."""
-    from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
-    from arena_eval.exact_simple_amm.simulator import ExactSimpleAMMSimulator
-    from arena_eval.exact_simple_amm.strategies import FixedFeeStrategy
-
-    initial_price = 100.0
-    norm_y = normalizer_depth_y
-    norm_x = norm_y / initial_price
-    frac = submission_depth_y / norm_y
-
-    cfg = ExactSimpleAMMConfig(
-        n_steps=n_steps,
-        initial_price=initial_price,
-        initial_x=norm_x,
-        initial_y=norm_y,
-        submission_liquidity_fraction=frac,
-        evaluator_kind="real_data",
-        price_process_kind="regime_switching",
-        retail_flow_kind="empirical_usd_size",
-        retail_arrival_rate=1_294_178 / 1_303_200,
-        retail_buy_prob=0.4842,
-        regime_invcdf_path=str(ANALYSIS_DIR / "regimes_invcdf.csv"),
-        regime_transition_path=str(ANALYSIS_DIR / "regimes_transition_matrix.csv"),
-        retail_usd_quantiles_path=str(ANALYSIS_DIR / "parent_order_usd_quantiles.csv"),
-    )
-    return ExactSimpleAMMSimulator(
-        config=cfg,
-        submission_strategy=FixedFeeStrategy(
-            bid_fee=submission_fee, ask_fee=submission_fee,
-        ),
-        normalizer_strategy=FixedFeeStrategy(
-            bid_fee=normalizer_fee, ask_fee=normalizer_fee,
-        ),
-        seed=seed,
-    )
+def load_impact_curve_sample() -> pd.DataFrame:
+    """Empirical router-routed non-5bp WETH/USDC impact sample
+    (size, spread vs pool_mid_pre). 7d window, V3 only."""
+    path = ANALYSIS_DIR / "non5bp_impact_sample_v3_pool_mid_7d.csv"
+    return pd.read_csv(path)
 
 
-def measure_sim_shares(
-    normalizer_fee: float,
-    normalizer_depth_y: float,
-    submission_depth_y: float = REAL_VIRTUAL_USDC,
-    submission_fee: float = REAL_POOL_FEE,
-    n_steps: int = 5_000,
-    seeds: tuple[int, ...] = (42, 43),
-) -> dict:
-    """Run simulation and return volume share and fee share of the submission pool."""
-    total_sub_vol = 0.0
-    total_norm_vol = 0.0
-    total_sub_fees = 0.0
-    total_norm_fees = 0.0
-    for seed in seeds:
-        sim = _build_sim(
-            normalizer_fee, normalizer_depth_y,
-            submission_depth_y, submission_fee, n_steps, seed,
-        )
-        sim.run()
-        res = sim.result()
-        total_sub_vol += res.retail_volume_submission_y
-        total_norm_vol += res.retail_volume_normalizer_y
-        # Fee earned ≈ volume × fee_rate (submission uses submission_fee, normalizer uses normalizer_fee)
-        total_sub_fees += res.retail_volume_submission_y * submission_fee
-        total_norm_fees += res.retail_volume_normalizer_y * normalizer_fee
-    total_vol = total_sub_vol + total_norm_vol
-    total_fees = total_sub_fees + total_norm_fees
-    return {
-        "vol_share": total_sub_vol / total_vol if total_vol > 0 else 0.5,
-        "fee_share": total_sub_fees / total_fees if total_fees > 0 else 0.5,
-    }
+def load_impact_curve_fit() -> dict:
+    """Plan A and Plan B V2 fits of the normalizer pool."""
+    import json
+    return json.loads((ANALYSIS_DIR / "impact_curve_fit_pool_mid.json").read_text())
 
 
-def calibrate_2d(
-    target_vol_share: float = REAL_VOLUME_SHARE_5BP,
-    target_fee_share: float = REAL_FEE_SHARE_5BP,
-    submission_depth_y: float = REAL_VIRTUAL_USDC,
-    submission_fee: float = REAL_POOL_FEE,
-    fee_grid: tuple[float, ...] = (0.0003, 0.0005, 0.001, 0.003, 0.005, 0.007, 0.01, 0.012, 0.015, 0.02, 0.03),
-    n_steps: int = 5_000,
-    seeds: tuple[int, ...] = (42, 43),
-    depth_tol: float = 0.005,
-    verbose: bool = True,
-) -> tuple[dict, list[dict]]:
-    """2D calibration: sweep normalizer fee, binary-search depth for volume share,
-    then pick the fee where fee share also matches.
-
-    Returns (best_result, full_log).
-    """
-    full_log = []
-
-    for nf in fee_grid:
-        if verbose:
-            print(f"\n--- Normalizer fee = {nf * 1e4:.1f} bps ---")
-        # Binary search depth for volume share
-        lo, hi = 1e7, 50e9
-        best_depth = None
-        for iteration in range(15):
-            mid = math.sqrt(lo * hi)
-            shares = measure_sim_shares(
-                nf, mid, submission_depth_y, submission_fee, n_steps, seeds,
-            )
-            entry = {
-                "normalizer_fee": nf,
-                "normalizer_fee_bps": nf * 1e4,
-                "depth_y": mid,
-                "depth_M": mid / 1e6,
-                "vol_share": shares["vol_share"],
-                "fee_share": shares["fee_share"],
-                "vol_share_error": shares["vol_share"] - target_vol_share,
-                "fee_share_error": shares["fee_share"] - target_fee_share,
-                "iteration": iteration,
-            }
-            full_log.append(entry)
-            if verbose:
-                print(f"  depth=${mid/1e6:,.1f}M → vol={shares['vol_share']*100:.1f}% fee={shares['fee_share']*100:.1f}%")
-            if abs(shares["vol_share"] - target_vol_share) < depth_tol:
-                best_depth = mid
-                break
-            if shares["vol_share"] > target_vol_share:
-                lo = mid
-            else:
-                hi = mid
-        if best_depth is None:
-            best_depth = mid
-
-    # Find the fee point where fee_share is closest to target
-    # Only look at converged points (last iteration per fee)
-    converged = {}
-    for e in full_log:
-        nf = e["normalizer_fee"]
-        if nf not in converged or e["iteration"] > converged[nf]["iteration"]:
-            converged[nf] = e
-    converged_list = sorted(converged.values(), key=lambda x: x["normalizer_fee"])
-    best = min(converged_list, key=lambda x: abs(x["fee_share_error"]))
-
-    if verbose:
-        print(f"\n=== Best calibration ===")
-        print(f"  Normalizer fee:  {best['normalizer_fee_bps']:.1f} bps")
-        print(f"  Normalizer depth: ${best['depth_M']:.1f}M")
-        print(f"  Vol share: {best['vol_share']*100:.1f}% (target: {target_vol_share*100:.1f}%)")
-        print(f"  Fee share: {best['fee_share']*100:.1f}% (target: {target_fee_share*100:.1f}%)")
-
-    return best, full_log
+def load_validation() -> dict:
+    """Validation payload from validate_pool_mid.py."""
+    import json
+    return json.loads((ANALYSIS_DIR / "validation_retail_pool_mid.json").read_text())
 
 
-def run_calibrated_sim(
-    normalizer_fee: float,
-    normalizer_depth_y: float,
-    submission_depth_y: float = REAL_VIRTUAL_USDC,
-    submission_fee: float = REAL_POOL_FEE,
-    n_steps: int = 10_000,
-    seeds: tuple[int, ...] = (42, 43, 44),
-    collect_markouts: bool = True,
-) -> dict:
-    """Run full simulation with calibrated parameters.
-
-    Collects per-trade markouts on the submission pool and aggregate metrics.
-    Per-trade markout is computed against the **next block's** ``fair_price``
-    (the canonical "next-block mid" used by the on-chain ``markout_next_bps``
-    column in ``analysis/weth_usdc_90d/markout_5bp_pool_percentiles.csv`` and
-    by T3 in this calibration). Using the same-block ``fair_price`` would put
-    every tiny retail trade on the deterministic post-arb-spot fee boundary at
-    exactly +0 bps or +10 bps, producing two narrow spikes that don't exist in
-    the empirical data - see ``reports/markout_spike_investigation.md``.
-    """
-    per_trade_markouts_bps: list[float] = []
-    total_sub_vol = 0.0
-    total_norm_vol = 0.0
-    total_retail_edge_sub = 0.0
-    total_arb_loss_sub = 0.0
-
-    def trade_edge(amount_x: float, amount_y: float, trader_side: str, fair: float) -> float:
-        if trader_side == "sell_x":
-            # Retail sells X (buys Y), LP buys X
-            return amount_x * fair - amount_y
-        # Retail buys X (sells Y), LP sells X
-        return amount_y - amount_x * fair
-
-    for seed in seeds:
-        sim = _build_sim(
-            normalizer_fee, normalizer_depth_y,
-            submission_depth_y, submission_fee, n_steps, seed,
-        )
-        # Defer-by-one-block buffer so each retail trade is marked against the
-        # next block's fair_price (apples-to-apples with the empirical
-        # next-block markout). Trades from the last block of each seed have no
-        # next block and are dropped (~0.03% of samples; negligible for the
-        # distribution overlay).
-        pending: list[tuple[float, float, str]] = []
-        while not sim.done:
-            step = sim.step_once()
-            if collect_markouts:
-                # First, finalise any pending retail trades against this block's
-                # newly drawn fair_price.
-                new_fair = step["fair_price"]
-                for amount_x, amount_y, trader_side in pending:
-                    edge = trade_edge(amount_x, amount_y, trader_side, new_fair)
-                    if amount_y > 0:
-                        per_trade_markouts_bps.append(edge / amount_y * 10_000)
-                pending.clear()
-                # Buffer this block's retail submission trades for the next block.
-                for ev in step["trade_events"]:
-                    if ev["source"] != "retail" or ev["venue"] != "submission":
-                        continue
-                    pending.append(
-                        (float(ev["amount_x"]), float(ev["amount_y"]), str(ev["trader_side"]))
-                    )
-
-        res = sim.result()
-        total_sub_vol += res.retail_volume_submission_y
-        total_norm_vol += res.retail_volume_normalizer_y
-        total_retail_edge_sub += res.retail_edge_submission
-        total_arb_loss_sub += res.arb_loss_submission
-
-    total = total_sub_vol + total_norm_vol
-    vol_share = total_sub_vol / total if total > 0 else 0.5
-    agg_markout = (total_retail_edge_sub / total_sub_vol * 10_000) if total_sub_vol > 0 else 0.0
-
-    markouts = np.array(per_trade_markouts_bps)
-    return {
-        "markouts_bps": markouts,
-        "volume_share_submission": vol_share,
-        "aggregate_markout_bps": agg_markout,
-        "retail_edge_sub": total_retail_edge_sub,
-        "arb_loss_sub": total_arb_loss_sub,
-        "normalizer_fee": normalizer_fee,
-        "normalizer_depth_y": normalizer_depth_y,
-        "submission_depth_y": submission_depth_y,
-        "submission_fee": submission_fee,
-        "n_seeds": len(seeds),
-        "n_steps": n_steps,
-    }
+def load_real_retail_markouts() -> pd.DataFrame:
+    """Per-swap retail markouts on the 5bp pool (real on-chain, 6 days)."""
+    return pd.read_csv(ANALYSIS_DIR / "markout_5bp_pool_retail.csv")
 
 
-def plot_calibration_2d(
-    full_log: list[dict],
-    target_vol_share: float = REAL_VOLUME_SHARE_5BP,
-    target_fee_share: float = REAL_FEE_SHARE_5BP,
-    ax: plt.Axes | None = None,
-) -> plt.Axes:
-    """Plot 2D calibration: fee share vs normalizer fee, with converged depth annotations."""
+def load_sim_retail_markouts() -> pd.DataFrame:
+    """Per-trade retail markouts on the 5bp submission pool (simulator)."""
+    return pd.read_csv(ANALYSIS_DIR / "markout_5bp_pool_sim_retail.csv")
+
+
+def v2_spread_bps(size_usd: np.ndarray, phi: float, depth_usdc: float) -> np.ndarray:
+    """V2 constant-product impact + fee model in spread-bps space.
+    spread = (phi + (1-phi) S/D) / (1-phi)  [retail-side, pool-frame]."""
+    S = np.asarray(size_usd, dtype=np.float64)
+    return ((phi + (1.0 - phi) * S / depth_usdc) / (1.0 - phi)) * 1e4
+
+
+def plot_impact_curve_fit(ax: plt.Axes | None = None,
+                          plan_key: str = "plan_b",
+                          n_bins: int = 30) -> plt.Axes:
+    """Empirical impact cloud (USD-weighted binned median) overlaid with the
+    fitted V2 curve. Spread is referenced to the pool's pre-trade marginal
+    price (pool_mid_pre)."""
+    sample = load_impact_curve_sample()
+    fit = load_impact_curve_fit()
+    plan = fit[plan_key]
+    phi = plan["phi"]; depth = plan["depth_usdc"]
+
+    size = sample["size_usd"].to_numpy()
+    spread = sample["observed_spread_pool_bps"].to_numpy()
+
+    # USD-weighted log-binned medians (each bin's median spread, weight = size_usd)
+    s_clip = np.clip(size, 1.0, np.inf)
+    edges = np.logspace(np.log10(max(s_clip.min(), 10)),
+                        np.log10(s_clip.max()), n_bins + 1)
+    centers = []
+    medians = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (s_clip >= lo) & (s_clip < hi)
+        if m.sum() < 3:
+            continue
+        centers.append(np.exp(0.5 * (np.log(lo) + np.log(hi))))
+        medians.append(np.median(spread[m]))
+    centers = np.array(centers); medians = np.array(medians)
+
     if ax is None:
         _, ax = plt.subplots(figsize=(10, 5))
 
-    # Extract converged points (last iteration per fee)
-    converged = {}
-    for e in full_log:
-        nf = e["normalizer_fee"]
-        if nf not in converged or e["iteration"] > converged[nf]["iteration"]:
-            converged[nf] = e
-    pts = sorted(converged.values(), key=lambda x: x["normalizer_fee"])
+    ax.scatter(size, spread, s=3, color="#bdc3c7", alpha=0.25, label="empirical (per-tx)")
+    ax.plot(centers, medians, "o-", color="#2c3e50", lw=2, label="empirical (binned median)")
 
-    fees_bps = [p["normalizer_fee_bps"] for p in pts]
-    fee_shares = [p["fee_share"] * 100 for p in pts]
-    vol_shares = [p["vol_share"] * 100 for p in pts]
+    sizes_fit = np.logspace(2, np.log10(size.max()), 200)
+    ax.plot(sizes_fit, v2_spread_bps(sizes_fit, phi, depth),
+            "-", color="#27ae60", lw=2.5,
+            label=f"V2 fit ({plan_key}): φ={phi*1e4:.2f} bps, D=${depth/1e6:.1f}M")
 
-    ax.plot(fees_bps, fee_shares, "o-", color="#27ae60", lw=2, markersize=8,
-            label="Simulated fee share (vol-share matched)")
-    ax.axhline(target_fee_share * 100, color="#e74c3c", ls="--", lw=1.5, alpha=0.7)
-    ax.text(fees_bps[-1] * 0.7, target_fee_share * 100 + 1,
-            f"Target: {target_fee_share * 100:.1f}%", color="#e74c3c", fontsize=9)
-
-    # Annotate depths
-    for p in pts:
-        ax.annotate(f"${p['depth_M']:.0f}M\nvol={p['vol_share']*100:.0f}%",
-                     (p["normalizer_fee_bps"], p["fee_share"] * 100),
-                     textcoords="offset points", xytext=(0, 14),
-                     fontsize=7, color="#8b8fa3", ha="center")
-
-    ax.set_xlabel("Normalizer Fee (bps)", fontsize=11)
-    ax.set_ylabel("5bp Pool Fee Share (%)", fontsize=11)
-    ax.set_title("2D Calibration: Fee Share vs Normalizer Fee\n(each point depth-matched for volume share)",
-                 fontsize=12, fontweight="bold")
     ax.set_xscale("log")
+    ax.set_xlabel("Trade size (USD)")
+    ax.set_ylabel("Spread vs pool_mid_pre (bps)")
+    ax.set_title("Non-5bp retail impact curve — empirical vs V2 fit",
+                 fontweight="bold", fontsize=12)
+    ax.set_ylim(-5, max(60, np.percentile(spread, 99) * 1.1))
     _apply_style(ax)
     return ax
 
 
-def plot_markout_comparison(
-    sim_data: dict,
-    observed: dict | None = None,
-    trim_pct: float = 1.0,
-    bins: int = 80,
-    ax: plt.Axes | None = None,
-) -> plt.Axes:
-    """Overlaid histograms comparing simulated vs observed markout distributions."""
-    if observed is None:
-        observed = OBSERVED_MARKOUT
+def plot_retail_share_bars(ax: plt.Axes | None = None) -> plt.Axes:
+    """Bar chart: retail volume share + retail fee share at 5bp pool, sim vs real."""
+    v = load_validation()
+    r = v["real_targets"]; s = v["sim_results"]
+
     if ax is None:
-        _, ax = plt.subplots(figsize=(10, 5))
+        _, ax = plt.subplots(figsize=(8, 4.5))
 
-    markouts = sim_data["markouts_bps"]
+    metrics = ["Volume share", "Fee share"]
+    real_vals = [r["retail_volume_share_5bp"], r["retail_fee_share_5bp"]]
+    sim_vals  = [s["retail_volume_share_mean"], s["retail_fee_share_mean"]]
+    sim_stds  = [s["retail_volume_share_std"],  s["retail_fee_share_std"]]
 
-    # Load observed percentile curve as pseudo-samples (uniformly spaced in probability).
-    # Retail-only on the 5bp pool — same slice as the sim's `markouts_bps`
-    # (filtered by source == 'retail', venue == 'submission').
-    # Uses markout_15s per the project convention (LP profitability ⇒ 15s reference).
-    obs_df = pd.read_csv(ANALYSIS_DIR / "markout_5bp_pool_percentiles_retail.csv")
-    obs_vals = obs_df["markout_15s_bps"].values
+    x = np.arange(len(metrics))
+    w = 0.35
+    ax.bar(x - w/2, real_vals, w, color="#2c3e50", label="real (on-chain)")
+    ax.bar(x + w/2, sim_vals,  w, color="#27ae60", label="sim",
+           yerr=sim_stds, capsize=4, ecolor="#1c603c")
+    for i, (rv, sv) in enumerate(zip(real_vals, sim_vals)):
+        ax.text(i - w/2, rv + 0.015, f"{rv*100:.1f}%", ha="center", fontsize=9)
+        ax.text(i + w/2, sv + 0.015, f"{sv*100:.1f}%", ha="center", fontsize=9)
 
-    # Trim both to the same range for readability
-    lo = min(np.percentile(markouts, trim_pct), np.percentile(obs_vals, trim_pct))
-    hi = max(np.percentile(markouts, 100 - trim_pct), np.percentile(obs_vals, 100 - trim_pct))
-    sim_trimmed = markouts[(markouts >= lo) & (markouts <= hi)]
-    obs_trimmed = obs_vals[(obs_vals >= lo) & (obs_vals <= hi)]
-
-    ax.hist(obs_trimmed, bins=bins, density=True, color=STYLE["observed"]["color"],
-            alpha=0.45, edgecolor="none", label="Observed (on-chain)")
-    ax.hist(sim_trimmed, bins=bins, density=True, color=STYLE["realistic"]["color"],
-            alpha=0.45, edgecolor="none", label="Simulated (calibrated)")
-
-    # Annotate key stats
-    sim_avg = np.mean(markouts)
-    sim_med = np.median(markouts)
-    txt = (
-        f"Simulated:  avg={sim_avg:.2f} bps, median={sim_med:.2f} bps\n"
-        f"Observed:   avg={observed['avg_bps']:.2f} bps, median={observed['p50']:.2f} bps"
-    )
-    ax.text(0.02, 0.97, txt, transform=ax.transAxes, fontsize=8.5,
-            verticalalignment="top", fontfamily="monospace",
-            bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.8, edgecolor="#ccc"))
-
-    ax.set_xlabel("LP Markout per Trade (bps)", fontsize=11)
-    ax.set_ylabel("Density", fontsize=11)
-    ax.set_title("Markout Distribution: Simulated vs Observed",
-                 fontsize=12, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics)
+    ax.set_ylim(0, 1.05)
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+    ax.set_title("Retail flow at 5bp pool — sim vs real",
+                 fontweight="bold", fontsize=12)
     _apply_style(ax)
     return ax
 
 
-def plot_markout_qq(
-    sim_data: dict,
-    observed: dict | None = None,
-    ax: plt.Axes | None = None,
-) -> plt.Axes:
-    """QQ-style comparison: simulated markout percentiles vs observed."""
-    if observed is None:
-        observed = OBSERVED_MARKOUT
+def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: np.ndarray) -> np.ndarray:
+    order = np.argsort(values)
+    v = values[order]; w = weights[order]
+    cum = np.cumsum(w)
+    cutoff = q * cum[-1]
+    idx = np.minimum(np.searchsorted(cum, cutoff), len(v) - 1)
+    return v[idx]
+
+
+def plot_retail_markout_overlay(ax: plt.Axes | None = None,
+                                clip_bps: float = 25.0) -> plt.Axes:
+    """USD-weighted retail markout_15s density: real vs sim, on the 5bp pool."""
+    real = load_real_retail_markouts()
+    sim  = load_sim_retail_markouts()
+
     if ax is None:
-        _, ax = plt.subplots(figsize=(6, 6))
+        _, ax = plt.subplots(figsize=(9, 4.5))
 
-    pct_keys = ["p5", "p25", "p50", "p75", "p95"]
-    pct_vals = [5, 25, 50, 75, 95]
-    obs_vals = [observed[k] for k in pct_keys]
-    sim_vals = [float(np.percentile(sim_data["markouts_bps"], p)) for p in pct_vals]
+    bins = np.linspace(-clip_bps, clip_bps, 60)
+    ax.hist(np.clip(real["markout_15s_bps"], -clip_bps, clip_bps),
+            bins=bins, weights=real["usd_amount"], density=True,
+            alpha=0.55, color="#2c3e50", label="real (USD-weighted)")
+    ax.hist(np.clip(sim["markout_bps"], -clip_bps, clip_bps),
+            bins=bins, weights=sim["usd_amount"], density=True,
+            alpha=0.55, color="#27ae60", label="sim (USD-weighted)")
 
-    ax.scatter(obs_vals, sim_vals, s=80, color="#27ae60", zorder=5, edgecolors="white")
-    for label, ox, sy in zip(pct_keys, obs_vals, sim_vals):
-        ax.annotate(label, (ox, sy), textcoords="offset points",
-                    xytext=(8, 8), fontsize=9, color="#8b8fa3")
+    # USD-weighted means
+    rm = float((real["markout_15s_bps"] * real["usd_amount"]).sum() / real["usd_amount"].sum())
+    sm = float((sim["markout_bps"] * sim["usd_amount"]).sum() / sim["usd_amount"].sum())
+    ax.axvline(rm, color="#2c3e50", ls="--", lw=1.2, label=f"real μ = {rm:+.2f}")
+    ax.axvline(sm, color="#27ae60", ls="--", lw=1.2, label=f"sim μ = {sm:+.2f}")
 
-    lo = min(min(obs_vals), min(sim_vals)) - 1
-    hi = max(max(obs_vals), max(sim_vals)) + 1
-    ax.plot([lo, hi], [lo, hi], ls="--", color="#999", lw=1, label="y = x")
-
-    ax.set_xlabel("Observed Markout (bps)", fontsize=11)
-    ax.set_ylabel("Simulated Markout (bps)", fontsize=11)
-    ax.set_title("Markout QQ: Simulated vs Observed", fontsize=12, fontweight="bold")
+    ax.set_xlabel("markout_15s (bps, LP-positive)")
+    ax.set_ylabel("USD-weighted density")
+    ax.set_title("Retail markout_15s at 5bp pool — sim vs real (USD-w)",
+                 fontweight="bold", fontsize=12)
     _apply_style(ax)
     return ax
 
 
-def get_calibration_summary(sim_data: dict) -> pd.DataFrame:
-    """Summary table comparing calibrated simulation outcomes vs on-chain observations."""
-    markouts = sim_data["markouts_bps"]
-    # Compute simulated fee share
-    sub_fees = sim_data.get("retail_edge_sub", 0)
-    sub_vol = sim_data["volume_share_submission"]
-    norm_vol = 1 - sub_vol
-    sim_fee_share = (sub_vol * sim_data["submission_fee"]) / (
-        sub_vol * sim_data["submission_fee"] + norm_vol * sim_data["normalizer_fee"]
-    ) if sim_data.get("normalizer_fee", 0) > 0 else 0
+def plot_retail_markout_qq(ax: plt.Axes | None = None,
+                           q_grid: tuple = (1, 5, 10, 25, 50, 75, 90, 95, 99)) -> plt.Axes:
+    """USD-weighted QQ plot of retail markout_15s: real vs sim."""
+    real = load_real_retail_markouts()
+    sim  = load_sim_retail_markouts()
 
-    rows = {
-        "Volume Share (5bp pool)": {
-            "Observed": f"{REAL_VOLUME_SHARE_5BP * 100:.1f}%",
-            "Simulated": f"{sim_data['volume_share_submission'] * 100:.1f}%",
-        },
-        "Fee Share (5bp pool)": {
-            "Observed": f"{REAL_FEE_SHARE_5BP * 100:.1f}%",
-            "Simulated": f"{sim_fee_share * 100:.1f}%",
-        },
-        "Avg LP Markout (bps)": {
-            "Observed": f"{OBSERVED_MARKOUT['avg_bps']:.2f}",
-            "Simulated": f"{np.mean(markouts):.2f}",
-        },
-        "Median LP Markout (bps)": {
-            "Observed": f"{OBSERVED_MARKOUT['p50']:.2f}",
-            "Simulated": f"{np.median(markouts):.2f}",
-        },
-        "Markout p5 (bps)": {
-            "Observed": f"{OBSERVED_MARKOUT['p5']:.2f}",
-            "Simulated": f"{np.percentile(markouts, 5):.2f}",
-        },
-        "Markout p95 (bps)": {
-            "Observed": f"{OBSERVED_MARKOUT['p95']:.2f}",
-            "Simulated": f"{np.percentile(markouts, 95):.2f}",
-        },
-        "Normalizer Depth": {
-            "Observed": "—",
-            "Simulated": f"${sim_data['normalizer_depth_y'] / 1e6:.1f}M",
-        },
-        "Normalizer Fee": {
-            "Observed": "—",
-            "Simulated": f"{sim_data['normalizer_fee'] * 1e4:.0f} bps",
-        },
-    }
-    return pd.DataFrame(rows).T.rename_axis("Metric")
+    qs = np.array(q_grid) / 100.0
+    real_q = _weighted_quantile(real["markout_15s_bps"].to_numpy(),
+                                real["usd_amount"].to_numpy(), qs)
+    sim_q  = _weighted_quantile(sim["markout_bps"].to_numpy(),
+                                sim["usd_amount"].to_numpy(),  qs)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(5.5, 5))
+
+    ax.scatter(real_q, sim_q, s=60, color="#27ae60")
+    for q_pct, x, y in zip(q_grid, real_q, sim_q):
+        ax.annotate(f"p{q_pct}", (x, y), textcoords="offset points",
+                    xytext=(6, -4), fontsize=8, color="#555")
+    lo = min(real_q.min(), sim_q.min())
+    hi = max(real_q.max(), sim_q.max())
+    pad = 0.05 * (hi - lo)
+    ax.plot([lo - pad, hi + pad], [lo - pad, hi + pad], "--", color="#888", lw=1)
+    ax.set_xlabel("real markout_15s quantile (bps, USD-w)")
+    ax.set_ylabel("sim markout quantile (bps, USD-w)")
+    ax.set_title("Markout QQ — sim vs real", fontweight="bold", fontsize=12)
+    _apply_style(ax)
+    return ax
+
+
+def get_validation_summary_table() -> pd.DataFrame:
+    """Display-friendly table of the three validation metrics: sim vs real."""
+    v = load_validation()
+    r = v["real_targets"]; s = v["sim_results"]; p = v["calibrated_normalizer"]
+
+    rows = [
+        ("Retail volume share @5bp",
+         f"{r['retail_volume_share_5bp']*100:.2f}%",
+         f"{s['retail_volume_share_mean']*100:.2f}% ± {s['retail_volume_share_std']*100:.2f}pp"),
+        ("Retail fee share @5bp",
+         f"{r['retail_fee_share_5bp']*100:.2f}%",
+         f"{s['retail_fee_share_mean']*100:.2f}% ± {s['retail_fee_share_std']*100:.2f}pp"),
+        ("Retail markout_15s — USD-w mean",
+         f"{r['markout_15s_usd_w_mean_bps']:+.2f} bps",
+         f"{s['markout_usd_w_mean_bps']:+.2f} bps"),
+        ("Normalizer φ",          "—", f"{p['phi_bps']:.2f} bps"),
+        ("Normalizer depth",      "—", f"${p['depth_usdc_m']:.1f}M"),
+        ("Submission pool fee",   "5.00 bps (frozen)", "5.00 bps (frozen)"),
+        ("Submission pool depth", "$212.2M (frozen)",  "$212.2M (frozen)"),
+    ]
+    return pd.DataFrame(rows, columns=["Metric", "Real (on-chain)", "Simulator"])
