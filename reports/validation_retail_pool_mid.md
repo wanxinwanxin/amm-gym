@@ -6,7 +6,7 @@ referenced). 5bp pool metrics never enter the fit.
 
 This script runs the simulator with:
 - submission = 5bp on-chain frozen (fee=0.0005, virtual_depth_y=$212.16M)
-- normalizer = **plan_b**: φ = **1.34 bps**, depth = **$34.8M**
+- normalizer = **plan_b**: φ = **1.29 bps**, depth = **$56.1M**
 
 and compares the three retail-only validation metrics to on-chain reality.
 
@@ -14,21 +14,21 @@ and compares the three retail-only validation metrics to on-chain reality.
 
 | Metric | Real | Sim (mean ± std) |
 |--------|------|-------------------|
-| Volume share @5bp | 78.20% | 75.64% ± 1.90pp |
-| Fee share @5bp    | 15.15% | 92.03% ± 0.75pp |
+| Volume share @5bp | 49.49% | 66.86% ± 2.27pp |
+| Fee share @5bp    | 17.15% | 88.63% ± 1.02pp |
 
 ## Retail markout_15s on the 5bp pool — USD-weighted
 
 | Metric | Real (USD-w) | Sim (USD-w) |
 |--------|--------------|-------------|
-| mean   | -2.968 bps | +125.443 bps |
-| p1 | -45.64 | -4.00 |
-| p5 | -14.99 | +0.69 |
-| p25 | -4.39 | +8.81 |
-| p50 | -1.49 | +22.18 |
-| p75 | +0.67 | +224.21 |
-| p95 | +6.79 | +358.81 |
-| p99 | +15.16 | +362.04 |
+| mean   | +6.889 bps | +120.111 bps |
+| p1 | -9.39 | -4.20 |
+| p5 | -4.27 | +0.61 |
+| p25 | +2.83 | +8.58 |
+| p50 | +6.16 | +25.62 |
+| p75 | +10.07 | +254.70 |
+| p95 | +18.47 | +330.82 |
+| p99 | +23.53 | +334.77 |
 
 Convention: markout_15s is LP-positive (a positive value means LP profited
 from the trade after the 15-second look-ahead). Real data uses 15s; the sim

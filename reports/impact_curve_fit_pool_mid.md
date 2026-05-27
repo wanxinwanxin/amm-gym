@@ -5,7 +5,7 @@ window **2026-05-14..2026-05-20**, aggregated per tx, with spread measured
 against the pool's own **pre-trade marginal price** (V3 sqrtPriceX96 of
 the prior swap).
 
-**n_txs** = **28,269** after dropping mixed-direction and dust rows.
+**n_txs** = **11,596** after dropping mixed-direction and dust rows.
 
 Sign convention: LP-positive (`observed_spread_pool_bps > 0` ⇔ user
 paid above pool mid).
@@ -14,9 +14,9 @@ paid above pool mid).
 
 | stat | value |
 |------|-------|
-| USD-weighted mean spread | **+8.316 bps** |
-| median spread | +1.751 bps |
-| p1 / p99 spread | +1.00 / +33.50 bps |
+| USD-weighted mean spread | **+3.728 bps** |
+| median spread | +1.085 bps |
+| p1 / p99 spread | +1.00 / +30.00 bps |
 | fraction of txs with negative spread | 0.00% |
 
 The previous fair-referenced sample had USD-weighted mean **-1.62 bps**;
@@ -27,16 +27,16 @@ restores the natural positive shape.
 
 | median size | n_txs | USD-vol share | USD-w mean spread (bps) | median spread (bps) | pct negative |
 |-------------|-------|----------------|--------------------------|----------------------|---------------|
-| $            2 |    290 |  0.00% |  +3.89 |  +1.00 |   0.0% |
-| $            8 |    694 |  0.00% |  +1.66 |  +1.00 |   0.0% |
-| $           30 |  1,215 |  0.03% |  +3.17 |  +1.01 |   0.0% |
-| $          100 |  2,249 |  0.20% |  +1.51 |  +1.03 |   0.0% |
-| $          357 |  2,835 |  0.92% |  +3.27 |  +1.11 |   0.0% |
-| $        1,570 |  7,162 |  9.65% |  +2.78 |  +1.52 |   0.0% |
-| $        4,325 | 10,719 | 43.41% |  +3.61 |  +2.30 |   0.0% |
-| $       12,538 |  2,909 | 35.82% |  +9.30 |  +4.57 |   0.0% |
-| $       46,133 |    187 |  8.44% | +25.74 | +24.09 |   0.0% |
-| $      171,785 |      9 |  1.53% | +61.89 | +51.00 |   0.0% |
+| $            2 |    272 |  0.00% |  +3.63 |  +1.00 |   0.0% |
+| $            6 |    491 |  0.02% |  +1.64 |  +1.00 |   0.0% |
+| $           20 |    983 |  0.15% |  +2.63 |  +1.01 |   0.0% |
+| $           58 |  1,712 |  0.85% |  +2.02 |  +1.02 |   0.0% |
+| $          184 |  2,620 |  3.89% |  +1.21 |  +1.05 |   0.0% |
+| $          521 |  2,391 | 10.94% |  +1.38 |  +1.16 |   0.0% |
+| $        1,656 |  2,157 | 30.12% |  +1.72 |  +1.47 |   0.0% |
+| $        4,498 |    828 | 33.05% |  +2.86 |  +2.29 |   0.0% |
+| $       12,215 |    128 | 13.91% |  +5.87 |  +4.51 |   0.0% |
+| $       57,407 |     14 |  7.06% | +17.44 | +13.73 |   0.0% |
 
 The curve is **monotone non-decreasing, strictly positive at the mean**, and
 clearly V2-shaped: small-size shelf near the 1bp pool's fee, then linear-in-size
@@ -46,19 +46,19 @@ growth at larger sizes.
 
 | Plan | φ | depth (USDC) | fit-loss |
 |------|----|---------------|----------|
-| **A — USD-weighted L2** | **0.000397** (≈3.9737 bps) | **$39,509,766** (≈$39.5 M) | 70.0781 |
-| **B — USD-weighted Huber (δ = 3.64 bps)** | **0.000134** (≈1.3424 bps) | **$34,808,967** (≈$34.8 M) | 10.7962 |
+| **A — USD-weighted L2** | **0.000145** (≈1.4521 bps) | **$42,070,403** (≈$42.1 M) | 14.9811 |
+| **B — USD-weighted Huber (δ = 0.52 bps)** | **0.000129** (≈1.2911 bps) | **$56,090,643** (≈$56.1 M) | 0.5125 |
 
 ## Residual diagnostics (USD-weighted, |residual| in bps)
 
 | stat        | Plan A | Plan B |
 |-------------|---------|---------|
-| median \|r\|     |   2.95 |   0.78 |
-| p75 \|r\|        |   4.04 |   2.13 |
-| p90 \|r\|        |  13.91 |  14.49 |
-| p99 \|r\|        |  25.49 |  28.30 |
-| USD-weighted RMSE |   8.37 |   8.71 |
-| USD-weighted mean residual | +0.000 | +2.046 |
+| median \|r\|     |   0.45 |   0.29 |
+| p75 \|r\|        |   0.82 |   0.46 |
+| p90 \|r\|        |   2.46 |   1.46 |
+| p99 \|r\|        |  22.12 |  27.47 |
+| USD-weighted RMSE |   3.87 |   4.09 |
+| USD-weighted mean residual | +0.000 | +0.730 |
 
 ## Artifacts
 
