@@ -262,9 +262,9 @@ def generate_realistic_retail_quantiles(
     from arena_eval.exact_simple_amm.dynamics import EmpiricalUSDSizeRetailTrader
 
     trader = EmpiricalUSDSizeRetailTrader(
-        arrival_rate=1_294_178 / 1_303_200,  # cross-pool parent order rate
+        arrival_rate=857_035 / 1_303_200,  # cleaned 6m parent-order rate
         usd_quantiles_path=ANALYSIS_DIR / "parent_order_usd_quantiles.csv",
-        buy_prob=0.4842,
+        buy_prob=0.4413,
         seed=seed,
     )
     sizes = []
@@ -295,7 +295,7 @@ def get_arrival_rate_comparison() -> pd.DataFrame:
         rows.append({"source": f"Observed ({w})", "rate_per_block": rate, "orders": int(sel["parent_count"]), "blocks": int(blocks)})
     rows.append({"source": "Challenge Model", "rate_per_block": 0.8, "orders": None, "blocks": None})
     rows.append({"source": "Realistic Simulator (single-pool)", "rate_per_block": 186_085 / 645_123, "orders": None, "blocks": None})
-    rows.append({"source": "Realistic Simulator (cross-pool)", "rate_per_block": 1_294_178 / 1_303_200, "orders": None, "blocks": None})
+    rows.append({"source": "Realistic Simulator (cross-pool)", "rate_per_block": 857_035 / 1_303_200, "orders": None, "blocks": None})
     return pd.DataFrame(rows)
 
 

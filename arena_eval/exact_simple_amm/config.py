@@ -15,8 +15,15 @@ DEFAULT_REGIME_TRANSITION_PATH = ANALYSIS_DIR / "regimes_transition_matrix.csv"
 DEFAULT_RETAIL_IMPACT_PERCENTILES_PATH = ANALYSIS_DIR / "percentiles.csv"
 DEFAULT_RETAIL_USD_QUANTILES_PATH = ANALYSIS_DIR / "parent_order_usd_quantiles.csv"
 EMPIRICAL_ROUTER_ARRIVAL_RATE = 186_085 / 645_123
-EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE = 1_294_178 / 1_303_200
-EMPIRICAL_PARENT_ORDER_BUY_PROB = 0.4842
+# Refreshed 2026-05-27 from cleaned retail_routers cohort (Wintermute MMs removed,
+# Odos/OpenOcean/LI.FI added). Old contaminated values were 1_294_178/1_303_200
+# (≈0.9931/block) and 0.4842 — Wintermute trades had inflated both the arrival
+# rate (Wintermute was ~34% of "parent orders") and the buy share. The cleaned
+# values come from router_parent_order_size_windows.csv (6m, strict, all):
+#   parent_count = 857_035, horizon_days = 181 -> 0.657639 / block
+#   buy_eth_n / (buy_eth_n + sell_eth_n) = 378_173 / 857_035 = 0.4413
+EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE = 857_035 / 1_303_200
+EMPIRICAL_PARENT_ORDER_BUY_PROB = 0.4413
 
 @dataclass(frozen=True)
 class ExactSimpleAMMConfig:
