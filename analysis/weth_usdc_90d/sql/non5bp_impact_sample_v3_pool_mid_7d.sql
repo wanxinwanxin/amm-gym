@@ -1,13 +1,29 @@
 -- Build the non-5bp price-impact sample for router-routed WETH/USDC transactions,
--- emitting BOTH references side-by-side:
---   (a) observed_spread_pool_bps    -- referenced to pre-trade POOL mid (V3 sqrtPriceX96)
---   (b) observed_spread_fair_bps    -- referenced to FAIR price (Binance benchmark at block)
+-- emitting THREE references side-by-side:
+--   (a) observed_spread_pool_bps      -- referenced to pre-trade POOL mid (V3 sqrtPriceX96)
+--   (b) observed_spread_fair_bps      -- referenced to CONTEMPORANEOUS fair (Binance benchmark
+--                                        joined per-swap from markout_prod, ~at the trade's block)
+--   (c) observed_spread_fair_lag_bps  -- referenced to LAGGED fair: the Binance mid in the 12s
+--                                        bucket immediately preceding the trade's own 12s bucket
+--                                        (i.e. "fair at or before 12s before the trade"; the
+--                                        real-data analog of the simulator's "1 step before").
 --
--- Rationale:
---   V2/V3 spread formula is in pool's-own-frame: exec_price vs pool_mid_pre.
---   Calibrating against pool-mid removes drift between AMM mid and Binance mid,
---   which is the most likely source of the negative-spread tail we observed
---   in the previous (fair-referenced) sample.
+-- The calibration (scripts/calibration/fit_impact_curve_pool_mid.py) fits the V2
+-- normalizer (φ, depth) against (c) — spread vs pre-trade fair. (a)/(b) are kept as
+-- diagnostics. Rationale for the lag: the contemporaneous fair (b) shares timing
+-- contamination with the trade's own impact and produced a negative-spread tail in
+-- the earlier fair-referenced sample; lagging the fair by one 12s step gives a clean
+-- pre-trade reference that the trade cannot have influenced, matching how the
+-- simulator's normalizer is priced at the prevailing fair when retail arrives.
+--
+-- LAGGED-FAIR SOURCE (no Binance book table for May 2026):
+--   The cex.binance_book_snapshot_5_ETHUSDT table only covers 2023-04..2025-11, so we
+--   reconstruct a 12s Binance-mid time series from markout_prod.benchmark over ALL
+--   WETH/USDC swaps in the window (oriented to USDC/WETH). benchmark is the Binance
+--   reference at each swap's block, so the last benchmark in each 12s bucket ≈ the
+--   Binance mid at the end of that bucket. We build a complete 12s grid (1h pad before
+--   the window for early-trade lookback), forward-fill empty buckets from the most
+--   recent populated bucket, and read the bucket one step (12s) before each trade.
 --
 -- Scope:
 --   - Universe: Uniswap V3 swap events on WETH/USDC pools, excluding the 5bp pool.
@@ -16,7 +32,7 @@
 --     require separate pool-mid reconstruction and are not material for the
 --     diagnostic comparison.
 --   - 7-day window: 2026-05-14..2026-05-20 (same as previous fair-only sample).
---   - tx_to ∈ 19 router list (matches non5bp_impact_sample_7d.sql).
+--   - tx_to ∈ 19 router list (matches router_cohorts.py RETAIL_ROUTERS).
 --
 -- Pool-mid computation (V3):
 --   sqrtPriceX96 emitted by V3 Swap log is POST-swap.
@@ -37,15 +53,19 @@
 --   - side: sign of net signed WETH across legs; tx with mixed directions are dropped.
 --   - effective_exec = sum(USDC) / sum(WETH)
 --   - pool_mid_pre_blended = USD-weighted average of leg pool_mid_pre  (USDC/WETH)
---   - fair_price_blended  = USD-weighted average of leg benchmark      (USDC/WETH)
---   - observed_spread_pool_bps = 1e4 * (effective_exec - pool_mid_pre_blended) * side / pool_mid_pre_blended
---   - observed_spread_fair_bps = 1e4 * (effective_exec - fair_price_blended)   * side / fair_price_blended
---     (matches previous query's convention — signed, no abs())
+--   - fair_price_blended   = USD-weighted average of leg benchmark      (USDC/WETH)
+--   - fair_lag_price        = market-wide Binance mid one 12s step before the tx (USDC/WETH)
+--   - observed_spread_pool_bps     = 1e4 * (effective_exec - pool_mid_pre_blended) * side / pool_mid_pre_blended
+--   - observed_spread_fair_bps     = 1e4 * (effective_exec - fair_price_blended)   * side / fair_price_blended
+--   - observed_spread_fair_lag_bps = 1e4 * (effective_exec - fair_lag_price)       * side / fair_lag_price
+--     (all signed, no abs())
 
 DECLARE start_date DATE DEFAULT DATE '2026-05-14';
 DECLARE end_date   DATE DEFAULT DATE '2026-05-20';
 DECLARE start_ts   TIMESTAMP DEFAULT TIMESTAMP '2026-05-14 00:00:00';
 DECLARE end_ts     TIMESTAMP DEFAULT TIMESTAMP '2026-05-20 23:59:59';
+-- 1-hour pad so trades near the window start can look back one 12s step.
+DECLARE grid_start TIMESTAMP DEFAULT TIMESTAMP '2026-05-13 23:00:00';
 
 WITH constants AS (
   SELECT
@@ -139,10 +159,8 @@ oriented AS (
     CASE
       WHEN s.sqrt_pre IS NULL THEN NULL
       WHEN s.token0_addr = (SELECT usdc FROM constants) THEN
-        -- (sqrt/2^96)^2 = WETH_raw/USDC_raw; USDC_human/WETH_human = 10^12 / that
         SAFE_DIVIDE(POW(10.0, 12), POW(s.sqrt_pre / POW(2.0, 96), 2))
       WHEN s.token0_addr = (SELECT weth FROM constants) THEN
-        -- (sqrt/2^96)^2 = USDC_raw/WETH_raw; USDC_human/WETH_human = that * 10^12
         POW(s.sqrt_pre / POW(2.0, 96), 2) * POW(10.0, 12)
     END AS pool_mid_pre_usdc_per_weth,
     s.sqrt_pre,
@@ -173,35 +191,75 @@ legs AS (
     AND o.pool_mid_pre_usdc_per_weth IS NOT NULL
     AND o.pool_mid_pre_usdc_per_weth > 0
 ),
--- Attach Binance benchmark per (tx_hash, log_index) from markout_prod for side-by-side fair reference
-markout AS (
+-- All WETH/USDC markout_prod rows in the (padded) window: source of BOTH the
+-- per-swap contemporaneous fair AND the reconstructed 12s Binance-mid grid.
+mk_weth_usdc AS (
   SELECT
     LOWER(transaction_hash) AS tx_hash,
     log_index,
-    benchmark AS leg_benchmark,
+    block_timestamp         AS mk_ts,
+    benchmark,
     LOWER(token_sold_address)   AS sold_addr,
     LOWER(token_bought_address) AS bought_addr
   FROM `uniswap-labs.research.markout_prod`
   WHERE chain = 'ethereum'
-    AND block_date BETWEEN start_date AND end_date
+    AND block_date BETWEEN DATE_SUB(start_date, INTERVAL 1 DAY) AND end_date
     AND benchmark IS NOT NULL
+    AND (
+      (LOWER(token_sold_address)   = (SELECT weth FROM constants)
+        AND LOWER(token_bought_address) = (SELECT usdc FROM constants))
+      OR
+      (LOWER(token_sold_address)   = (SELECT usdc FROM constants)
+        AND LOWER(token_bought_address) = (SELECT weth FROM constants))
+    )
 ),
--- Orient markout benchmark to USDC/WETH per leg (same convention as previous query)
-markout_oriented AS (
+-- Orient markout benchmark to USDC/WETH per swap (benchmark is bought-per-sold units)
+mk_oriented AS (
   SELECT
-    m.tx_hash,
-    m.log_index,
-    -- leg_benchmark is in (bought per sold) units; orient to USDC/WETH
+    tx_hash,
+    log_index,
+    mk_ts,
     CASE
-      -- sold WETH, bought USDC: benchmark is USDC/WETH already
-      WHEN m.sold_addr = (SELECT weth FROM constants) AND m.bought_addr = (SELECT usdc FROM constants) THEN m.leg_benchmark
-      -- sold USDC, bought WETH: benchmark is WETH/USDC, invert
-      WHEN m.sold_addr = (SELECT usdc FROM constants) AND m.bought_addr = (SELECT weth FROM constants) THEN SAFE_DIVIDE(1.0, m.leg_benchmark)
+      WHEN sold_addr = (SELECT weth FROM constants) AND bought_addr = (SELECT usdc FROM constants) THEN benchmark
+      WHEN sold_addr = (SELECT usdc FROM constants) AND bought_addr = (SELECT weth FROM constants) THEN SAFE_DIVIDE(1.0, benchmark)
       ELSE NULL
-    END AS leg_benchmark_usdc_per_weth
-  FROM markout AS m
+    END AS bench_usdc_per_weth
+  FROM mk_weth_usdc
 ),
--- Join V3 swap legs with markout benchmark
+-- Per-swap contemporaneous fair (existing diagnostic), keyed by (tx_hash, log_index)
+markout_oriented AS (
+  SELECT tx_hash, log_index, bench_usdc_per_weth AS leg_benchmark_usdc_per_weth
+  FROM mk_oriented
+),
+-- 12s benchmark observations: last (latest) benchmark within each 12s bucket
+fair_bucket_obs AS (
+  SELECT
+    TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(mk_ts), 12) * 12) AS bucket_ts,
+    bench_usdc_per_weth                                   AS mid
+  FROM mk_oriented
+  WHERE bench_usdc_per_weth IS NOT NULL AND bench_usdc_per_weth > 0
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(mk_ts), 12) * 12)
+    ORDER BY mk_ts DESC
+  ) = 1
+),
+-- Complete 12s grid over the padded window (each generated point floored to its bucket)
+grid AS (
+  SELECT DISTINCT TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(g), 12) * 12) AS grid_ts
+  FROM UNNEST(GENERATE_TIMESTAMP_ARRAY(grid_start, end_ts, INTERVAL 12 SECOND)) AS g
+),
+-- Forward-fill the grid: each bucket gets the most recent populated benchmark
+grid_filled AS (
+  SELECT
+    g.grid_ts,
+    LAST_VALUE(o.mid IGNORE NULLS) OVER (
+      ORDER BY g.grid_ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS fair_mid
+  FROM grid AS g
+  LEFT JOIN fair_bucket_obs AS o
+    ON o.bucket_ts = g.grid_ts
+),
+-- Join V3 swap legs with the per-swap contemporaneous benchmark
 legs_with_fair AS (
   SELECT
     l.tx_hash, l.block_number, l.block_timestamp, l.log_index, l.pool, l.fee_tier,
@@ -222,9 +280,7 @@ agg AS (
     SUM(weth_amt)                                                       AS sum_weth,
     SUM(usdc_amt)                                                       AS sum_usdc,
     SUM(CAST(side AS FLOAT64) * weth_amt)                               AS net_signed_weth,
-    -- USD-weighted blended pool_mid_pre (USDC/WETH)
     SAFE_DIVIDE(SUM(pool_mid_pre_usdc_per_weth * leg_usd), SUM(leg_usd))  AS pool_mid_pre_blended,
-    -- USD-weighted blended fair benchmark (USDC/WETH), only over legs that joined markout
     SAFE_DIVIDE(
       SUM(IF(leg_benchmark_usdc_per_weth IS NOT NULL, leg_benchmark_usdc_per_weth * leg_usd, 0.0)),
       SUM(IF(leg_benchmark_usdc_per_weth IS NOT NULL, leg_usd, 0.0))
@@ -261,6 +317,16 @@ filtered AS (
     AND sum_usdc > 0
     AND pool_mid_pre_blended IS NOT NULL
     AND pool_mid_pre_blended > 0
+),
+-- Attach the lagged fair: Binance mid in the 12s bucket ONE STEP before the tx's bucket.
+-- (tx bucket = floor(block_timestamp/12); we read bucket = that minus 12s.)
+with_lag AS (
+  SELECT
+    f.*,
+    gf.fair_mid AS fair_lag_price
+  FROM filtered AS f
+  LEFT JOIN grid_filled AS gf
+    ON gf.grid_ts = TIMESTAMP_SECONDS((DIV(UNIX_SECONDS(f.block_timestamp), 12) - 1) * 12)
 )
 SELECT
   tx_hash,
@@ -275,12 +341,17 @@ SELECT
   pool_mid_pre_blended,
   fair_price_blended,
   fair_coverage_frac,
+  fair_lag_price,
   10000.0 * (effective_exec_usdc_per_weth - pool_mid_pre_blended) * CAST(side AS FLOAT64)
     / pool_mid_pre_blended AS observed_spread_pool_bps,
   CASE
     WHEN fair_price_blended IS NULL OR fair_price_blended = 0 THEN NULL
     ELSE 10000.0 * (effective_exec_usdc_per_weth - fair_price_blended) * CAST(side AS FLOAT64) / fair_price_blended
-  END AS observed_spread_fair_bps
-FROM filtered
+  END AS observed_spread_fair_bps,
+  CASE
+    WHEN fair_lag_price IS NULL OR fair_lag_price = 0 THEN NULL
+    ELSE 10000.0 * (effective_exec_usdc_per_weth - fair_lag_price) * CAST(side AS FLOAT64) / fair_lag_price
+  END AS observed_spread_fair_lag_bps
+FROM with_lag
 WHERE side IS NOT NULL
 ORDER BY block_timestamp;

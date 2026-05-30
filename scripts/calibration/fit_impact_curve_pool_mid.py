@@ -1,15 +1,21 @@
-"""Fit V2 (constant-product) "other pool" to the pool_mid_pre-referenced
-empirical non-5bp impact cloud (V3-only sample).
+"""Fit V2 (constant-product) "other pool" to the empirical non-5bp impact
+cloud (V3-only sample), referenced to the LAGGED fair price.
 
-Differs from the original fit_impact_curve.py by:
-- consuming non5bp_impact_sample_v3_pool_mid_7d.csv (pool_mid_pre reference)
-  instead of non5bp_impact_sample_7d.csv (fair_price reference);
-- writing to *_pool_mid.* output paths so both fits remain side by side
-  for comparison.
+Reference (SPREAD_COLUMN): observed_spread_fair_lag_bps — execution spread vs
+the Binance mid in the 12s bucket immediately preceding each trade ("fair at
+or before 12s before the trade"; the real-data analog of the simulator's
+"1 step before"). The sample CSV also carries observed_spread_pool_bps
+(pre-trade pool mid) and observed_spread_fair_bps (contemporaneous fair) as
+diagnostics — switch SPREAD_COLUMN to refit against those.
 
-Model and method otherwise unchanged: USD-weighted L2 (Plan A) and
-USD-weighted Huber (Plan B, delta = 90th percentile of |residual|
-under Plan A). Multi-start L-BFGS-B with the same 8 starting points.
+NOTE on the lagged reference: because the reference fair is one 12s step stale,
+each trade's measured spread includes ~12s of price drift on top of the pure
+execution slippage, so the per-trade cloud is much noisier (heavy ± tails)
+than the pool-mid cloud. The USD-weighted Huber fit (Plan B) is the robust
+default for exactly this reason.
+
+Model and method: USD-weighted L2 (Plan A) and USD-weighted Huber (Plan B,
+delta = 90th percentile of |residual| under Plan A). Multi-start L-BFGS-B.
 """
 
 from __future__ import annotations
@@ -25,6 +31,12 @@ from scipy.optimize import minimize
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SAMPLE_PATH = REPO_ROOT / "analysis" / "weth_usdc_90d" / "non5bp_impact_sample_v3_pool_mid_7d.csv"
 FIT_JSON_PATH = REPO_ROOT / "analysis" / "weth_usdc_90d" / "impact_curve_fit_pool_mid.json"
+
+# Spread reference to calibrate against. observed_spread_fair_lag_bps = spread vs
+# the lagged (pre-trade) fair. Alternatives in the same CSV for diagnostics:
+# observed_spread_pool_bps (pre-trade pool mid), observed_spread_fair_bps
+# (contemporaneous fair).
+SPREAD_COLUMN = "observed_spread_fair_lag_bps"
 FIT_PLOT_PATH = REPO_ROOT / "plots" / "impact_curve_fit_pool_mid.png"
 RESID_PLOT_PATH = REPO_ROOT / "plots" / "impact_curve_residuals_pool_mid.png"
 REPORT_PATH = REPO_ROOT / "reports" / "impact_curve_fit_pool_mid.md"
@@ -118,11 +130,12 @@ def main() -> None:
     df = pd.read_csv(SAMPLE_PATH)
     df = df[df["n_distinct_sides"] == 1].copy()
     df = df[df["size_usd"] > 1.0].copy()
+    df = df[np.isfinite(df[SPREAD_COLUMN])].copy()
     df = df.reset_index(drop=True)
-    print(f"loaded {len(df):,} txs after filters")
+    print(f"loaded {len(df):,} txs after filters (reference column: {SPREAD_COLUMN})")
 
     sizes = df["size_usd"].values.astype(np.float64)
-    obs = df["observed_spread_pool_bps"].values.astype(np.float64)
+    obs = df[SPREAD_COLUMN].values.astype(np.float64)
     weights = sizes
 
     print(f"obs spread USD-w mean = {(weights*obs).sum()/weights.sum():+.3f} bps")
@@ -166,7 +179,7 @@ def main() -> None:
     stats_b = usd_w_stats(resid_b, weights)
 
     payload = {
-        "reference": "pool_mid_pre (V3)",
+        "reference": f"{SPREAD_COLUMN} (lagged fair, 12s / 1-step pre-trade)",
         "window": "2026-05-14..2026-05-20",
         "n_txs": int(len(df)),
         "obs_summary": {
@@ -205,10 +218,10 @@ def main() -> None:
 def plot_fit_overlay(df, phi_a, depth_a, phi_b, depth_b, out: Path) -> None:
     fig, ax = plt.subplots(figsize=(10, 6))
     y_clip_lo, y_clip_hi = -10, 100
-    mask = (df["observed_spread_pool_bps"] >= y_clip_lo) & (df["observed_spread_pool_bps"] <= y_clip_hi)
+    mask = (df[SPREAD_COLUMN] >= y_clip_lo) & (df[SPREAD_COLUMN] <= y_clip_hi)
     plot_df = df[mask]
     hb = ax.hexbin(
-        plot_df["size_usd"], plot_df["observed_spread_pool_bps"],
+        plot_df["size_usd"], plot_df[SPREAD_COLUMN],
         xscale="log", yscale="linear",
         gridsize=60, mincnt=1, cmap="viridis", bins="log", alpha=0.7,
     )
@@ -290,9 +303,9 @@ def write_report(payload: dict, df: pd.DataFrame, out: Path) -> None:
         "n": len(x),
         "median_size": float(x["size_usd"].median()),
         "usd_vol_pct": float(100 * x["size_usd"].sum() / df_d["size_usd"].sum()),
-        "usd_wmean_spread_bps": float(np.sum(x["size_usd"] * x["observed_spread_pool_bps"]) / np.sum(x["size_usd"])),
-        "median_spread_bps": float(x["observed_spread_pool_bps"].median()),
-        "pct_neg": float((x["observed_spread_pool_bps"] < 0).mean() * 100),
+        "usd_wmean_spread_bps": float(np.sum(x["size_usd"] * x[SPREAD_COLUMN]) / np.sum(x["size_usd"])),
+        "median_spread_bps": float(x[SPREAD_COLUMN].median()),
+        "pct_neg": float((x[SPREAD_COLUMN] < 0).mean() * 100),
     }))
     by_dec_rows = "\n".join(
         f"| ${row['median_size']:>13,.0f} | {int(row['n']):>6,} | {row['usd_vol_pct']:>5.2f}% | "
@@ -300,17 +313,21 @@ def write_report(payload: dict, df: pd.DataFrame, out: Path) -> None:
         for _, row in by_dec.iterrows()
     )
 
-    md = f"""# Impact-curve fit — pool_mid_pre reference
+    md = f"""# Impact-curve fit — lagged-fair reference
 
 **Sample:** V3 swap legs of router-routed non-5bp WETH/USDC txs in the 7d
 window **{payload['window']}**, aggregated per tx, with spread measured
-against the pool's own **pre-trade marginal price** (V3 sqrtPriceX96 of
-the prior swap).
+against the **lagged fair price** — the Binance mid in the 12s bucket
+immediately preceding each trade ("fair at or before 12s before the trade";
+the real-data analog of the simulator's "1 step before"). Reference column:
+`{SPREAD_COLUMN}`.
 
 **n_txs** = **{n_txs:,}** after dropping mixed-direction and dust rows.
 
-Sign convention: LP-positive (`observed_spread_pool_bps > 0` ⇔ user
-paid above pool mid).
+Sign convention: LP-positive (`{SPREAD_COLUMN} > 0` ⇔ user paid above the
+lagged fair). Because the reference is one 12s step stale, each trade's
+spread also carries ~12s of price drift, so the cloud has heavy ± tails;
+the USD-weighted Huber fit (Plan B) is the robust default.
 
 ## Observation summary
 
@@ -321,9 +338,10 @@ paid above pool mid).
 | p1 / p99 spread | {obs_summary['p1_bps']:+.2f} / {obs_summary['p99_bps']:+.2f} bps |
 | fraction of txs with negative spread | {obs_summary['frac_negative']*100:.2f}% |
 
-The previous fair-referenced sample had USD-weighted mean **-1.62 bps**;
-the pool_mid_pre reference removes the AMM↔Binance timing drift and
-restores the natural positive shape.
+The lagged fair is a pre-trade reference (one 12s step before the trade), so
+the trade cannot have influenced it; it differs from the contemporaneous-fair
+and pool-mid references (both also in the sample CSV) by the 12s price drift it
+carries into each observation.
 
 ## Empirical impact curve, by log-size decile (USD-weighted)
 
