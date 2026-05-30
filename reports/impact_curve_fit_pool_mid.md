@@ -8,7 +8,7 @@ immediately preceding each trade ("fair at or before 12s before the trade";
 the real-data analog of the simulator's "1 step before"). Reference column:
 `observed_spread_fair_lag_bps`.
 
-**n_txs** = **3,745** after dropping mixed-direction and dust rows.
+**n_txs** = **69,627** after dropping mixed-direction and dust rows.
 
 Sign convention: LP-positive (`observed_spread_fair_lag_bps > 0` ⇔ user paid above the
 lagged fair). Because the reference is one 12s step stale, each trade's
@@ -19,10 +19,10 @@ the USD-weighted Huber fit (Plan B) is the robust default.
 
 | stat | value |
 |------|-------|
-| USD-weighted mean spread | **+1.736 bps** |
-| median spread | +1.234 bps |
-| p1 / p99 spread | -41.76 / +12.81 bps |
-| fraction of txs with negative spread | 23.55% |
+| USD-weighted mean spread | **+10.657 bps** |
+| median spread | +1.374 bps |
+| p1 / p99 spread | -20.67 / +82.68 bps |
+| fraction of txs with negative spread | 21.89% |
 
 The lagged fair is a pre-trade reference (one 12s step before the trade), so
 the trade cannot have influenced it; it differs from the contemporaneous-fair
@@ -33,16 +33,16 @@ carries into each observation.
 
 | median size | n_txs | USD-vol share | USD-w mean spread (bps) | median spread (bps) | pct negative |
 |-------------|-------|----------------|--------------------------|----------------------|---------------|
-| $            2 |     26 |  0.00% |  -2.32 |  +1.26 |  19.2% |
-| $            5 |     55 |  0.01% |  +0.88 |  +1.05 |  21.8% |
-| $           16 |    185 |  0.08% |  +2.12 |  +1.01 |  28.6% |
-| $           48 |    412 |  0.53% |  +0.76 |  +1.13 |  28.2% |
-| $          108 |    734 |  2.46% |  +0.86 |  +1.07 |  23.7% |
-| $          351 |    991 | 10.02% |  +0.18 |  +1.18 |  24.9% |
-| $          979 |    731 | 19.96% |  +1.40 |  +1.19 |  23.3% |
-| $        2,458 |    472 | 35.33% |  +1.62 |  +1.58 |  18.9% |
-| $        5,978 |    125 | 24.29% |  +2.49 |  +2.56 |  11.2% |
-| $       14,619 |     14 |  7.32% |  +3.22 |  +3.69 |  14.3% |
+| $            2 |  1,026 |  0.00% |  +1.28 |  +1.24 |  23.4% |
+| $            8 |  2,644 |  0.02% |  +1.08 |  +1.15 |  25.0% |
+| $           27 |  5,665 |  0.14% |  +0.29 |  +1.03 |  26.8% |
+| $           99 | 12,978 |  1.11% |  +0.99 |  +1.09 |  24.8% |
+| $          322 | 17,614 |  5.35% |  +1.31 |  +1.12 |  25.2% |
+| $        1,057 | 16,736 | 17.37% |  +2.50 |  +1.35 |  21.4% |
+| $        3,459 | 10,230 | 34.52% |  +8.24 |  +2.05 |  14.1% |
+| $       10,792 |  2,399 | 26.47% | +15.25 |  +4.09 |   5.7% |
+| $       39,988 |    316 | 12.52% | +20.24 |  +8.82 |   0.6% |
+| $      116,996 |     19 |  2.51% | +28.92 | +17.29 |   0.0% |
 
 The curve is **monotone non-decreasing, strictly positive at the mean**, and
 clearly V2-shaped: small-size shelf near the 1bp pool's fee, then linear-in-size
@@ -52,19 +52,19 @@ growth at larger sizes.
 
 | Plan | φ | depth (USDC) | fit-loss |
 |------|----|---------------|----------|
-| **A — USD-weighted L2** | **0.000116** (≈1.1579 bps) | **$80,984,508** (≈$81.0 M) | 102.7996 |
-| **B — USD-weighted Huber (δ = 4.07 bps)** | **0.000134** (≈1.3423 bps) | **$88,853,788** (≈$88.9 M) | 6.4308 |
+| **A — USD-weighted L2** | **0.000808** (≈8.0762 bps) | **$63,897,340** (≈$63.9 M) | 6631.2835 |
+| **B — USD-weighted Huber (δ = 9.84 bps)** | **0.000218** (≈2.1817 bps) | **$63,913,448** (≈$63.9 M) | 80.5953 |
 
 ## Residual diagnostics (USD-weighted, |residual| in bps)
 
 | stat        | Plan A | Plan B |
 |-------------|---------|---------|
-| median \|r\|     |   1.25 |   1.24 |
-| p75 \|r\|        |   2.26 |   2.27 |
-| p90 \|r\|        |   4.10 |   4.08 |
-| p99 \|r\|        |  24.30 |  24.15 |
-| USD-weighted RMSE |  10.14 |  10.14 |
-| USD-weighted mean residual | +0.000 | -0.133 |
+| median \|r\|     |   6.85 |   1.73 |
+| p75 \|r\|        |   8.35 |   3.34 |
+| p90 \|r\|        |  11.86 |   8.55 |
+| p99 \|r\|        | 161.48 | 167.23 |
+| USD-weighted RMSE |  81.43 |  81.65 |
+| USD-weighted mean residual | +0.000 | +5.901 |
 
 ## Artifacts
 

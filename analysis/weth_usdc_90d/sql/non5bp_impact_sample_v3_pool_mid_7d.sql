@@ -9,17 +9,20 @@
 --                                        real-data analog of the simulator's "1 step before").
 --
 -- RETAIL FILTER (the key change): instead of the broad 19-router cohort heuristic,
--- this restricts to transactions that paid a **MetaMask Swaps 87.5 bps convenience
--- fee** — a transfer to the MetaMask fee collector
--- 0xf326e4de8f66a0bdc0970b79e0924e33c79f1915 (Etherscan "MetaMask: DS Proxy";
--- empirically receives a clean ~87.9 bps cut of WETH/USDC swaps). A swap that paid
--- this fee is unambiguously a human retail user on the MetaMask front-end, which is
--- exactly the population the normalizer pool is meant to compete for.
---
--- The Uniswap-interface half of the strict filter is DEFERRED: Uniswap Labs dropped
--- the web-interface swap fee in late 2025, so the fee-transfer heuristic no longer
--- isolates interface flow. The canonical on-chain signature for interface-originated
--- txs is being confirmed (Pinky thread) before it is added here.
+-- this restricts to transactions that are unambiguously human retail on a known
+-- front-end. Two sources, unioned:
+--   1. Uniswap first-party front-end (web / mobile / extension) — from
+--      uniswap-labs.core.swaps, which materializes the off-chain x-request-source
+--      surface tag and the tx hash. There is NO on-chain marker for interface flow
+--      (Uniswap Labs dropped the web/mobile swap fee at UNIfication 2025-12-27, and
+--      web/mobile produce byte-identical calldata), so the only clean signal is this
+--      internal surface attribution joined by tx hash. (Confirmed via Pinky.)
+--   2. MetaMask Swaps — txs that paid the 87.5 bps convenience fee, i.e. a transfer
+--      to the MetaMask fee collector 0xf326e4de8f66a0bdc0970b79e0924e33c79f1915
+--      (Etherscan "MetaMask: DS Proxy"; empirically a clean ~87.9 bps cut).
+-- Both are end-user front-ends — exactly the population the normalizer is meant to
+-- compete for. (A 25 bps collector 0xcd6b98… that looked like a Uniswap interface
+-- fee turned out to be Rabby Wallet, not Uniswap — excluded.)
 --
 -- The calibration (scripts/calibration/fit_impact_curve_pool_mid.py) fits the V2
 -- normalizer (φ, depth) against (c) — spread vs pre-trade fair. (a)/(b) are kept as
@@ -61,12 +64,29 @@ WITH constants AS (
     '0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640' AS pool_5bp
 ),
 -- Transactions that paid the MetaMask 87.5 bps fee (transfer to the fee collector).
--- This IS the strict-retail filter — it replaces the old 19-router cohort join.
 mm_fee_txs AS (
   SELECT DISTINCT LOWER(TRANSACTION_HASH) AS tx_hash
   FROM `uniswap-allium.ethereum.assets_erc20_token_transfers`
   WHERE DATE(BLOCK_TIMESTAMP) BETWEEN start_date AND end_date
     AND LOWER(TO_ADDRESS) = mm_fee_addr
+),
+-- Transactions originated from the Uniswap first-party front-end (web / mobile /
+-- extension), via the materialized x-request-source surface tag in core.swaps,
+-- joined to the chain by tx hash. report_date padded ±1 day vs the on-chain window
+-- (the leg filter bounds the actual intersection by block_timestamp).
+uni_fe_txs AS (
+  SELECT DISTINCT LOWER(transaction_hash) AS tx_hash
+  FROM `uniswap-labs.core.swaps`
+  WHERE report_date BETWEEN DATE_SUB(start_date, INTERVAL 1 DAY) AND DATE_ADD(end_date, INTERVAL 1 DAY)
+    AND LOWER(chain_name) = 'ethereum'
+    AND is_complete
+    AND transaction_hash IS NOT NULL
+),
+-- Strict-retail tx set: Uniswap front-end OR MetaMask-fee (the new calibration cohort).
+retail_txs AS (
+  SELECT tx_hash FROM uni_fe_txs
+  UNION DISTINCT
+  SELECT tx_hash FROM mm_fee_txs
 ),
 -- V3 swap events restricted to WETH/USDC pools (any orientation), excluding the 5bp pool.
 v3_swaps AS (
@@ -150,7 +170,7 @@ legs AS (
     o.usdc_amt,
     o.pool_mid_pre_usdc_per_weth
   FROM oriented AS o
-  JOIN mm_fee_txs AS m
+  JOIN retail_txs AS m
     ON o.tx_hash = m.tx_hash
   WHERE o.side IS NOT NULL
     AND o.weth_amt > 0
