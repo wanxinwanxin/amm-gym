@@ -605,32 +605,46 @@ def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: np.ndarray) -
 
 
 def plot_retail_markout_overlay(ax: plt.Axes | None = None,
-                                clip_bps: float = 25.0) -> plt.Axes:
-    """USD-weighted retail markout_15s density: real vs sim, on the 5bp pool."""
+                                clip_bps: float | None = None) -> plt.Axes:
+    """USD-weighted retail markout_15s density: real vs sim, on the 5bp pool.
+
+    Shows the full RAW range by default (clip_bps=None) — no truncation — so the
+    sim's right tail resolves to its true location (a few large trades marking out
+    to ~+250 bps) instead of piling into an artificial edge bin. Pass a clip_bps
+    to truncate the view.
+    """
     real = load_real_retail_markouts()
     sim  = load_sim_retail_markouts()
+    rm_v = real["markout_15s_bps"].to_numpy(); rw = real["usd_amount"].to_numpy()
+    sm_v = sim["markout_bps"].to_numpy();      sw = sim["usd_amount"].to_numpy()
 
     if ax is None:
         _, ax = plt.subplots(figsize=(9, 4.5))
 
-    bins = np.linspace(-clip_bps, clip_bps, 60)
-    ax.hist(np.clip(real["markout_15s_bps"], -clip_bps, clip_bps),
-            bins=bins, weights=real["usd_amount"], density=True,
+    if clip_bps is not None:
+        rm_v = np.clip(rm_v, -clip_bps, clip_bps)
+        sm_v = np.clip(sm_v, -clip_bps, clip_bps)
+        lo, hi = -clip_bps, clip_bps
+    else:
+        lo = float(min(rm_v.min(), sm_v.min()))
+        hi = float(max(rm_v.max(), sm_v.max()))
+    bins = np.linspace(lo, hi, 120)
+    ax.hist(rm_v, bins=bins, weights=rw, density=True,
             alpha=0.55, color="#2c3e50", label="real (USD-weighted)")
-    ax.hist(np.clip(sim["markout_bps"], -clip_bps, clip_bps),
-            bins=bins, weights=sim["usd_amount"], density=True,
+    ax.hist(sm_v, bins=bins, weights=sw, density=True,
             alpha=0.55, color="#27ae60", label="sim (USD-weighted)")
 
-    # USD-weighted means
+    # USD-weighted means (computed on the raw, unclipped values)
     rm = float((real["markout_15s_bps"] * real["usd_amount"]).sum() / real["usd_amount"].sum())
     sm = float((sim["markout_bps"] * sim["usd_amount"]).sum() / sim["usd_amount"].sum())
     ax.axvline(rm, color="#2c3e50", ls="--", lw=1.2, label=f"real μ = {rm:+.2f}")
     ax.axvline(sm, color="#27ae60", ls="--", lw=1.2, label=f"sim μ = {sm:+.2f}")
 
-    ax.set_xlabel("markout_15s (bps, LP-positive)")
+    ax.set_xlabel("markout_15s (bps, LP-positive) — raw, unclipped")
     ax.set_ylabel("USD-weighted density")
     ax.set_title("Retail markout_15s at 5bp pool — sim vs real (USD-w)",
                  fontweight="bold", fontsize=12)
+    ax.set_xlim(lo, hi)
     _apply_style(ax)
     return ax
 
