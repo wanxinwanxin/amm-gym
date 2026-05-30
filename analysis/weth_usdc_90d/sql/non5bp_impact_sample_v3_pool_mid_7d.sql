@@ -1,5 +1,5 @@
--- Build the non-5bp price-impact sample for router-routed WETH/USDC transactions,
--- emitting THREE references side-by-side:
+-- Build the non-5bp price-impact sample for STRICTLY-RETAIL WETH/USDC
+-- transactions, emitting THREE spread references side-by-side:
 --   (a) observed_spread_pool_bps      -- referenced to pre-trade POOL mid (V3 sqrtPriceX96)
 --   (b) observed_spread_fair_bps      -- referenced to CONTEMPORANEOUS fair (Binance benchmark
 --                                        joined per-swap from markout_prod, ~at the trade's block)
@@ -8,64 +8,51 @@
 --                                        (i.e. "fair at or before 12s before the trade"; the
 --                                        real-data analog of the simulator's "1 step before").
 --
+-- RETAIL FILTER (the key change): instead of the broad 19-router cohort heuristic,
+-- this restricts to transactions that paid a **MetaMask Swaps 87.5 bps convenience
+-- fee** — a transfer to the MetaMask fee collector
+-- 0xf326e4de8f66a0bdc0970b79e0924e33c79f1915 (Etherscan "MetaMask: DS Proxy";
+-- empirically receives a clean ~87.9 bps cut of WETH/USDC swaps). A swap that paid
+-- this fee is unambiguously a human retail user on the MetaMask front-end, which is
+-- exactly the population the normalizer pool is meant to compete for.
+--
+-- The Uniswap-interface half of the strict filter is DEFERRED: Uniswap Labs dropped
+-- the web-interface swap fee in late 2025, so the fee-transfer heuristic no longer
+-- isolates interface flow. The canonical on-chain signature for interface-originated
+-- txs is being confirmed (Pinky thread) before it is added here.
+--
 -- The calibration (scripts/calibration/fit_impact_curve_pool_mid.py) fits the V2
 -- normalizer (φ, depth) against (c) — spread vs pre-trade fair. (a)/(b) are kept as
--- diagnostics. Rationale for the lag: the contemporaneous fair (b) shares timing
--- contamination with the trade's own impact and produced a negative-spread tail in
--- the earlier fair-referenced sample; lagging the fair by one 12s step gives a clean
--- pre-trade reference that the trade cannot have influenced, matching how the
--- simulator's normalizer is priced at the prevailing fair when retail arrives.
+-- diagnostics.
 --
--- LAGGED-FAIR SOURCE (no Binance book table for May 2026):
---   The cex.binance_book_snapshot_5_ETHUSDT table only covers 2023-04..2025-11, so we
---   reconstruct a 12s Binance-mid time series from markout_prod.benchmark over ALL
---   WETH/USDC swaps in the window (oriented to USDC/WETH). benchmark is the Binance
---   reference at each swap's block, so the last benchmark in each 12s bucket ≈ the
---   Binance mid at the end of that bucket. We build a complete 12s grid (1h pad before
---   the window for early-trade lookback), forward-fill empty buckets from the most
---   recent populated bucket, and read the bucket one step (12s) before each trade.
+-- LAGGED-FAIR SOURCE (no Binance book table for 2026): reconstructed from
+-- markout_prod.benchmark over ALL WETH/USDC swaps (last obs per 12s bucket,
+-- forward-filled); each trade reads the bucket one step (12s) before its own.
 --
--- Scope:
---   - Universe: Uniswap V3 swap events on WETH/USDC pools, excluding the 5bp pool.
---     V3 is ~90% of non-5bp router-routed WETH/USDC volume (probed 2026-05-14
---     30-min slice). V4 (~6%) and V2/Fluid/Curve (~4%) are dropped — they would
---     require separate pool-mid reconstruction and are not material for the
---     diagnostic comparison.
---   - 7-day window: 2026-05-14..2026-05-20 (same as previous fair-only sample).
---   - tx_to ∈ 19 router list (matches router_cohorts.py RETAIL_ROUTERS).
+-- WINDOW: 30 days, 2026-04-21..2026-05-20 (ending at the validation week). Widened
+-- from 7 days because the strict fee filter cuts the sample ~6x; 30 days restores a
+-- few thousand observations for a stable (φ, depth) fit under the noisy lagged ref.
 --
--- Pool-mid computation (V3):
---   sqrtPriceX96 emitted by V3 Swap log is POST-swap.
---   pool_mid_PRE for swap N = pool_mid_POST for the previous swap on same pool
---     (Mint/Burn between swaps don't change sqrtPriceX96).
---   We use LAG(sqrt_price_X96) OVER (PARTITION BY pool ORDER BY block_number, log_index).
---   First swap per pool in the window has no LAG and is dropped.
---   Decimal scaling (USDC=6, WETH=18):
---     If TOKEN0=USDC, TOKEN1=WETH:
---       price_raw = (sqrt/2^96)^2 = WETH_raw / USDC_raw
---       USDC_human / WETH_human = (10^(18-6)) / price_raw = 10^12 / price_raw
---     If TOKEN0=WETH, TOKEN1=USDC:
---       price_raw = (sqrt/2^96)^2 = USDC_raw / WETH_raw
---       USDC_human / WETH_human = price_raw * 10^12
+-- Scope: Uniswap V3 swap events on WETH/USDC pools, excluding the 5bp pool. V3 is
+-- ~90% of non-5bp WETH/USDC volume; V4/V2/others dropped (~10%, separate pool-mid
+-- reconstruction, not material for the diagnostic).
 --
--- Per-tx aggregation:
---   - All non-5bp V3 legs in the tx are rolled up into a single (size_usd, spread) point.
---   - side: sign of net signed WETH across legs; tx with mixed directions are dropped.
---   - effective_exec = sum(USDC) / sum(WETH)
---   - pool_mid_pre_blended = USD-weighted average of leg pool_mid_pre  (USDC/WETH)
---   - fair_price_blended   = USD-weighted average of leg benchmark      (USDC/WETH)
---   - fair_lag_price        = market-wide Binance mid one 12s step before the tx (USDC/WETH)
---   - observed_spread_pool_bps     = 1e4 * (effective_exec - pool_mid_pre_blended) * side / pool_mid_pre_blended
---   - observed_spread_fair_bps     = 1e4 * (effective_exec - fair_price_blended)   * side / fair_price_blended
---   - observed_spread_fair_lag_bps = 1e4 * (effective_exec - fair_lag_price)       * side / fair_lag_price
---     (all signed, no abs())
+-- Pool-mid (V3): sqrtPriceX96 in the Swap log is POST-swap; pool_mid_PRE for swap N
+-- = POST for the previous swap on the same pool. LAG over (pool ORDER BY block,
+-- log_index); first swap per pool in the window is dropped.
+--
+-- Per-tx aggregation: all non-5bp V3 legs rolled into one (size_usd, spread) point;
+-- side = sign of net signed WETH (mixed-direction txs dropped); effective_exec =
+-- sum(USDC)/sum(WETH); blended references are USD-weighted across legs.
 
-DECLARE start_date DATE DEFAULT DATE '2026-05-14';
+DECLARE start_date DATE DEFAULT DATE '2026-04-21';
 DECLARE end_date   DATE DEFAULT DATE '2026-05-20';
-DECLARE start_ts   TIMESTAMP DEFAULT TIMESTAMP '2026-05-14 00:00:00';
+DECLARE start_ts   TIMESTAMP DEFAULT TIMESTAMP '2026-04-21 00:00:00';
 DECLARE end_ts     TIMESTAMP DEFAULT TIMESTAMP '2026-05-20 23:59:59';
 -- 1-hour pad so trades near the window start can look back one 12s step.
-DECLARE grid_start TIMESTAMP DEFAULT TIMESTAMP '2026-05-13 23:00:00';
+DECLARE grid_start TIMESTAMP DEFAULT TIMESTAMP '2026-04-20 23:00:00';
+-- MetaMask Swaps fee collector (87.5 bps convenience fee).
+DECLARE mm_fee_addr STRING DEFAULT '0xf326e4de8f66a0bdc0970b79e0924e33c79f1915';
 
 WITH constants AS (
   SELECT
@@ -73,28 +60,13 @@ WITH constants AS (
     '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' AS usdc,
     '0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640' AS pool_5bp
 ),
-routers AS (
-  SELECT addr FROM UNNEST([
-    '0xef1c6e67703c7bd7107eed8303fbe6ec2554bf6b',
-    '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad',
-    '0x66a9893cc07d91d95644aedd05d03f95e1dba8af',
-    '0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45',
-    '0xe592427a0aece92de3edee1f18e0157c05861564',
-    '0x7a250d5630b4cf539739df2c5dacb4c659f2488d',
-    '0x1111111254fb6c44bac0bed2854e76f90643097d',
-    '0x1111111254eeb25477b68fb85ed929f73a960582',
-    '0x111111125421ca6dc452d289314280a0f8842a65',
-    '0xdef1c0ded9bec7f1a1670819833240f027b25eff',
-    '0x0000000000001ff3684f28c67538d4d072c22734',
-    '0xdef171fe48cf0115b1d80b88dc8eab59176fee57',
-    '0x6a000f20005980200259b80c5102003040001068',
-    '0x6131b5fae19ea4f9d964eac0408e4408b66337b5',
-    '0x617dee16b86534a5d792a4d7a62fb491b544111e',
-    '0x881d40237659c251811cec9c364ef91dc08d300c',
-    '0xcf5540fffcdc3d510b18bfca6d2b9987b0772559',
-    '0x6352a56caadc4f1e25cd6c75970fa768a3304e64',
-    '0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae'
-  ]) AS addr
+-- Transactions that paid the MetaMask 87.5 bps fee (transfer to the fee collector).
+-- This IS the strict-retail filter — it replaces the old 19-router cohort join.
+mm_fee_txs AS (
+  SELECT DISTINCT LOWER(TRANSACTION_HASH) AS tx_hash
+  FROM `uniswap-allium.ethereum.assets_erc20_token_transfers`
+  WHERE DATE(BLOCK_TIMESTAMP) BETWEEN start_date AND end_date
+    AND LOWER(TO_ADDRESS) = mm_fee_addr
 ),
 -- V3 swap events restricted to WETH/USDC pools (any orientation), excluding the 5bp pool.
 v3_swaps AS (
@@ -137,25 +109,21 @@ oriented AS (
     s.fee_tier,
     s.leg_usd,
     s.tx_to,
-    -- side: +1 if buyer bought WETH (pool sent WETH out, received USDC)
     CASE
-      WHEN s.token0_addr = (SELECT usdc FROM constants) AND s.t0_amt > 0 THEN 1   -- pool received USDC
-      WHEN s.token0_addr = (SELECT usdc FROM constants) AND s.t0_amt < 0 THEN -1  -- pool sent USDC
-      WHEN s.token0_addr = (SELECT weth FROM constants) AND s.t0_amt < 0 THEN 1   -- pool sent WETH
-      WHEN s.token0_addr = (SELECT weth FROM constants) AND s.t0_amt > 0 THEN -1  -- pool received WETH
+      WHEN s.token0_addr = (SELECT usdc FROM constants) AND s.t0_amt > 0 THEN 1
+      WHEN s.token0_addr = (SELECT usdc FROM constants) AND s.t0_amt < 0 THEN -1
+      WHEN s.token0_addr = (SELECT weth FROM constants) AND s.t0_amt < 0 THEN 1
+      WHEN s.token0_addr = (SELECT weth FROM constants) AND s.t0_amt > 0 THEN -1
       ELSE NULL
     END AS side,
-    -- |WETH amount|
     CASE
       WHEN s.token0_addr = (SELECT weth FROM constants) THEN ABS(s.t0_amt)
       WHEN s.token0_addr = (SELECT usdc FROM constants) THEN ABS(s.t1_amt)
     END AS weth_amt,
-    -- |USDC amount|
     CASE
       WHEN s.token0_addr = (SELECT usdc FROM constants) THEN ABS(s.t0_amt)
       WHEN s.token0_addr = (SELECT weth FROM constants) THEN ABS(s.t1_amt)
     END AS usdc_amt,
-    -- pool_mid_pre in USDC/WETH human units; NULL for first swap per pool in window
     CASE
       WHEN s.sqrt_pre IS NULL THEN NULL
       WHEN s.token0_addr = (SELECT usdc FROM constants) THEN
@@ -167,7 +135,7 @@ oriented AS (
     s.sqrt_post
   FROM v3_swaps AS s
 ),
--- Filter legs: keep router-routed, with valid amounts and pool_mid_pre
+-- Filter legs: keep MetaMask-fee txs, with valid amounts and pool_mid_pre
 legs AS (
   SELECT
     o.tx_hash,
@@ -182,8 +150,8 @@ legs AS (
     o.usdc_amt,
     o.pool_mid_pre_usdc_per_weth
   FROM oriented AS o
-  JOIN routers AS r
-    ON o.tx_to = r.addr
+  JOIN mm_fee_txs AS m
+    ON o.tx_hash = m.tx_hash
   WHERE o.side IS NOT NULL
     AND o.weth_amt > 0
     AND o.usdc_amt > 0
@@ -213,7 +181,6 @@ mk_weth_usdc AS (
         AND LOWER(token_bought_address) = (SELECT weth FROM constants))
     )
 ),
--- Orient markout benchmark to USDC/WETH per swap (benchmark is bought-per-sold units)
 mk_oriented AS (
   SELECT
     tx_hash,
@@ -226,12 +193,10 @@ mk_oriented AS (
     END AS bench_usdc_per_weth
   FROM mk_weth_usdc
 ),
--- Per-swap contemporaneous fair (existing diagnostic), keyed by (tx_hash, log_index)
 markout_oriented AS (
   SELECT tx_hash, log_index, bench_usdc_per_weth AS leg_benchmark_usdc_per_weth
   FROM mk_oriented
 ),
--- 12s benchmark observations: last (latest) benchmark within each 12s bucket
 fair_bucket_obs AS (
   SELECT
     TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(mk_ts), 12) * 12) AS bucket_ts,
@@ -243,12 +208,10 @@ fair_bucket_obs AS (
     ORDER BY mk_ts DESC
   ) = 1
 ),
--- Complete 12s grid over the padded window (each generated point floored to its bucket)
 grid AS (
   SELECT DISTINCT TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(g), 12) * 12) AS grid_ts
   FROM UNNEST(GENERATE_TIMESTAMP_ARRAY(grid_start, end_ts, INTERVAL 12 SECOND)) AS g
 ),
--- Forward-fill the grid: each bucket gets the most recent populated benchmark
 grid_filled AS (
   SELECT
     g.grid_ts,
@@ -259,7 +222,6 @@ grid_filled AS (
   LEFT JOIN fair_bucket_obs AS o
     ON o.bucket_ts = g.grid_ts
 ),
--- Join V3 swap legs with the per-swap contemporaneous benchmark
 legs_with_fair AS (
   SELECT
     l.tx_hash, l.block_number, l.block_timestamp, l.log_index, l.pool, l.fee_tier,
@@ -270,7 +232,6 @@ legs_with_fair AS (
   LEFT JOIN markout_oriented AS mo
     USING (tx_hash, log_index)
 ),
--- Per-tx aggregation: sum legs, USD-weighted blended references, signed net WETH for side
 agg AS (
   SELECT
     tx_hash,
@@ -318,8 +279,6 @@ filtered AS (
     AND pool_mid_pre_blended IS NOT NULL
     AND pool_mid_pre_blended > 0
 ),
--- Attach the lagged fair: Binance mid in the 12s bucket ONE STEP before the tx's bucket.
--- (tx bucket = floor(block_timestamp/12); we read bucket = that minus 12s.)
 with_lag AS (
   SELECT
     f.*,

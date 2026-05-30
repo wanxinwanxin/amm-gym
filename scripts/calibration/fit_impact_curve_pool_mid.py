@@ -180,7 +180,8 @@ def main() -> None:
 
     payload = {
         "reference": f"{SPREAD_COLUMN} (lagged fair, 12s / 1-step pre-trade)",
-        "window": "2026-05-14..2026-05-20",
+        "window": "2026-04-21..2026-05-20",
+        "retail_filter": "MetaMask 87.5bps fee (0xf326e4...); interface half pending",
         "n_txs": int(len(df)),
         "obs_summary": {
             "usd_w_mean_bps": float((weights*obs).sum()/weights.sum()),
@@ -315,8 +316,9 @@ def write_report(payload: dict, df: pd.DataFrame, out: Path) -> None:
 
     md = f"""# Impact-curve fit — lagged-fair reference
 
-**Sample:** V3 swap legs of router-routed non-5bp WETH/USDC txs in the 7d
-window **{payload['window']}**, aggregated per tx, with spread measured
+**Sample:** V3 swap legs of **MetaMask-fee retail** (87.5 bps convenience fee,
+collector `0xf326e4…`) non-5bp WETH/USDC txs in the 30-day window
+**{payload['window']}**, aggregated per tx, with spread measured
 against the **lagged fair price** — the Binance mid in the 12s bucket
 immediately preceding each trade ("fair at or before 12s before the trade";
 the real-data analog of the simulator's "1 step before"). Reference column:
