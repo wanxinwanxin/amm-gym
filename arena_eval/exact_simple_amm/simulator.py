@@ -632,6 +632,22 @@ class ExactSimpleAMMSimulator:
         self.bid_fee_normalizer_sum += self.normalizer.bid_fee
         self.ask_fee_normalizer_sum += self.normalizer.ask_fee
 
+    def _resync_normalizer_to_fair(self, fair_price: float) -> None:
+        """Snap the normalizer's mid to ``fair_price`` at constant USDC depth.
+
+        depth D = the initial normalizer USDC reserve (the calibrated depth);
+        reserve_y = D and reserve_x = D / fair, so spot = D / (D / fair) = fair
+        and retail always faces exactly the calibrated impact curve regardless
+        of the price level. Accumulated fees are left untouched. This is a
+        silent reprice with no counterparty — used only when
+        ``config.normalizer_tracks_fair`` is True.
+        """
+        if fair_price <= 0.0:
+            return
+        depth_y = float(self.config.normalizer_initial_y)
+        self.normalizer.reserve_y = depth_y
+        self.normalizer.reserve_x = depth_y / float(fair_price)
+
     def step_once(self) -> dict[str, object]:
         if self.done:
             raise RuntimeError("simulation is already complete")
@@ -702,39 +718,46 @@ class ExactSimpleAMMSimulator:
                 }
             )
 
-        normalizer_arb = self.arbitrageur.execute_arb(self.normalizer, fair_price, timestamp)
-        if normalizer_arb is not None:
-            pre_metrics = metric_snapshot()
-            self.arb_volume_normalizer_y += normalizer_arb.amount_y
-            self.arb_loss_normalizer += normalizer_arb.profit
-            self.edge_normalizer -= normalizer_arb.profit
-            post_metrics = metric_snapshot()
-            trade_events.append(
-                {
-                    "venue": normalizer_arb.amm_name,
-                    "source": normalizer_arb.source,
-                    "trader_side": "buy_x" if normalizer_arb.side == "sell" else "sell_x",
-                    "amount_x": normalizer_arb.amount_x,
-                    "amount_y": normalizer_arb.amount_y,
-                    "pre_spot_price": normalizer_arb.pre_spot_price,
-                    "post_spot_price": normalizer_arb.post_spot_price,
-                    "pre_state": {
-                        **global_quote_state(),
-                        f"{normalizer_arb.amm_name}_mid": normalizer_arb.pre_state["mid"],
-                        f"{normalizer_arb.amm_name}_bid_fee": normalizer_arb.pre_state["bid_fee"],
-                        f"{normalizer_arb.amm_name}_ask_fee": normalizer_arb.pre_state["ask_fee"],
-                    },
-                    "post_state": {
-                        **global_quote_state(),
-                        f"{normalizer_arb.amm_name}_mid": normalizer_arb.post_state["mid"],
-                        f"{normalizer_arb.amm_name}_bid_fee": normalizer_arb.post_state["bid_fee"],
-                        f"{normalizer_arb.amm_name}_ask_fee": normalizer_arb.post_state["ask_fee"],
-                    },
-                    "pre_metrics": pre_metrics,
-                    "post_metrics": post_metrics,
-                    "trade_info": normalizer_arb.trade_info,
-                }
-            )
+        if self.config.normalizer_tracks_fair:
+            # Normalizer = efficient "rest of market": snap its mid to fair at
+            # constant USDC depth D, so it is correctly priced when retail
+            # arrives and no arb ever hits it. Silent reprice — no trade event,
+            # no arb accounting (normalizer edge/PnL are not validation targets).
+            self._resync_normalizer_to_fair(fair_price)
+        else:
+            normalizer_arb = self.arbitrageur.execute_arb(self.normalizer, fair_price, timestamp)
+            if normalizer_arb is not None:
+                pre_metrics = metric_snapshot()
+                self.arb_volume_normalizer_y += normalizer_arb.amount_y
+                self.arb_loss_normalizer += normalizer_arb.profit
+                self.edge_normalizer -= normalizer_arb.profit
+                post_metrics = metric_snapshot()
+                trade_events.append(
+                    {
+                        "venue": normalizer_arb.amm_name,
+                        "source": normalizer_arb.source,
+                        "trader_side": "buy_x" if normalizer_arb.side == "sell" else "sell_x",
+                        "amount_x": normalizer_arb.amount_x,
+                        "amount_y": normalizer_arb.amount_y,
+                        "pre_spot_price": normalizer_arb.pre_spot_price,
+                        "post_spot_price": normalizer_arb.post_spot_price,
+                        "pre_state": {
+                            **global_quote_state(),
+                            f"{normalizer_arb.amm_name}_mid": normalizer_arb.pre_state["mid"],
+                            f"{normalizer_arb.amm_name}_bid_fee": normalizer_arb.pre_state["bid_fee"],
+                            f"{normalizer_arb.amm_name}_ask_fee": normalizer_arb.pre_state["ask_fee"],
+                        },
+                        "post_state": {
+                            **global_quote_state(),
+                            f"{normalizer_arb.amm_name}_mid": normalizer_arb.post_state["mid"],
+                            f"{normalizer_arb.amm_name}_bid_fee": normalizer_arb.post_state["bid_fee"],
+                            f"{normalizer_arb.amm_name}_ask_fee": normalizer_arb.post_state["ask_fee"],
+                        },
+                        "pre_metrics": pre_metrics,
+                        "post_metrics": post_metrics,
+                        "trade_info": normalizer_arb.trade_info,
+                    }
+                )
 
         orders = self.retail_trader.generate_orders(
             fair_price=fair_price,

@@ -102,10 +102,22 @@ def run_realistic_clairvoyant_seed(
         edge_submission -= arb_profit
         arb_volume_submission_y += submission_arb_y
 
-        normalizer, normalizer_arb_profit, normalizer_arb_y = _execute_arb(normalizer, fair_price)
-        arb_loss_normalizer += normalizer_arb_profit
-        edge_normalizer -= normalizer_arb_profit
-        arb_volume_normalizer_y += normalizer_arb_y
+        if exact_config.normalizer_tracks_fair:
+            # Snap the normalizer to fair at constant USDC depth D (no arb hits it).
+            depth_y = float(exact_config.normalizer_initial_y)
+            normalizer = AMMState(
+                reserve_x=depth_y / fair_price if fair_price > 0.0 else normalizer.reserve_x,
+                reserve_y=depth_y,
+                bid_fee=normalizer.bid_fee,
+                ask_fee=normalizer.ask_fee,
+                accumulated_fees_x=normalizer.accumulated_fees_x,
+                accumulated_fees_y=normalizer.accumulated_fees_y,
+            )
+        else:
+            normalizer, normalizer_arb_profit, normalizer_arb_y = _execute_arb(normalizer, fair_price)
+            arb_loss_normalizer += normalizer_arb_profit
+            edge_normalizer -= normalizer_arb_profit
+            arb_volume_normalizer_y += normalizer_arb_y
 
         reference_state = submission if exact_config.retail_impact_reference_venue == "submission" else normalizer
         orders = decode_realistic_orders(

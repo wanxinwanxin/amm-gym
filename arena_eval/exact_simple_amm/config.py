@@ -51,6 +51,13 @@ class ExactSimpleAMMConfig:
     retail_impact_reference_venue: str = "normalizer"
     retail_impact_scale_mode: str = "current_state"
     retail_usd_quantiles_path: str | None = None
+    # When True, the normalizer pool is re-synced to the prevailing fair price at
+    # the top of every step (constant USDC depth D = normalizer_initial_y,
+    # reserve_x = D / fair) instead of being arbed toward fair. It then represents
+    # the efficient "rest of the market" — always correctly priced when retail
+    # arrives, and no arbitrage ever hits it. Challenge mode leaves this False
+    # (there the normalizer is a real competing baseline pool that must be arbed).
+    normalizer_tracks_fair: bool = False
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.submission_liquidity_fraction) or self.submission_liquidity_fraction <= 0.0:
@@ -105,6 +112,7 @@ class ExactSimpleAMMConfig:
                 regime_invcdf_path=str(DEFAULT_REGIME_INVCDF_PATH),
                 regime_transition_path=str(DEFAULT_REGIME_TRANSITION_PATH),
                 retail_usd_quantiles_path=str(DEFAULT_RETAIL_USD_QUANTILES_PATH),
+                normalizer_tracks_fair=True,
             )
         return cls(
             evaluator_kind="real_data",

@@ -85,6 +85,7 @@ def build_sim(*, phi: float, depth_y: float, seed: int, n_steps: int = N_STEPS):
         regime_invcdf_path=str(ANALYSIS / "regimes_invcdf.csv"),
         regime_transition_path=str(ANALYSIS / "regimes_transition_matrix.csv"),
         retail_usd_quantiles_path=str(ANALYSIS / "parent_order_usd_quantiles.csv"),
+        normalizer_tracks_fair=True,              # normalizer is re-synced to fair each step (no arb)
     )
     return ExactSimpleAMMSimulator(
         config=cfg,
