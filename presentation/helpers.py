@@ -497,15 +497,15 @@ def plot_impact_curve_fit(ax: plt.Axes | None = None,
                           plan_key: str = "plan_b",
                           n_bins: int = 30) -> plt.Axes:
     """Empirical impact cloud (USD-weighted binned median) overlaid with the
-    fitted V2 curve. Spread is referenced to the pool's pre-trade marginal
-    price (pool_mid_pre)."""
+    fitted V2 curve. Spread is referenced to the lagged (pre-trade) fair price —
+    the Binance mid one 12s step before each trade."""
     sample = load_impact_curve_sample()
     fit = load_impact_curve_fit()
     plan = fit[plan_key]
     phi = plan["phi"]; depth = plan["depth_usdc"]
 
     size = sample["size_usd"].to_numpy()
-    spread = sample["observed_spread_pool_bps"].to_numpy()
+    spread = sample["observed_spread_fair_lag_bps"].to_numpy()
 
     # USD-weighted log-binned medians (each bin's median spread, weight = size_usd)
     s_clip = np.clip(size, 1.0, np.inf)
@@ -534,10 +534,12 @@ def plot_impact_curve_fit(ax: plt.Axes | None = None,
 
     ax.set_xscale("log")
     ax.set_xlabel("Trade size (USD)")
-    ax.set_ylabel("Spread vs pool_mid_pre (bps)")
+    ax.set_ylabel("Spread vs lagged fair (bps)")
     ax.set_title("Non-5bp retail impact curve — empirical vs V2 fit",
                  fontweight="bold", fontsize=12)
-    ax.set_ylim(-5, max(60, np.percentile(spread, 99) * 1.1))
+    # The lagged-fair cloud has heavy ± tails (12s of price drift per trade);
+    # clip the view so the binned-median curve and V2 fit stay legible.
+    ax.set_ylim(-10, 60)
     _apply_style(ax)
     return ax
 
