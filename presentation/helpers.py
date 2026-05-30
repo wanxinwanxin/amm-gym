@@ -507,6 +507,21 @@ def plot_impact_curve_fit(ax: plt.Axes | None = None,
     size = sample["size_usd"].to_numpy()
     spread = sample["observed_spread_fair_lag_bps"].to_numpy()
 
+    # Flag sandwich / transient-MEV-excursion victims: trades that filled against a
+    # pool whose PRE-TRADE mid was already pushed off fair (a separate frontrun tx
+    # earlier in the block moved the pool; a backrun restores it within the block).
+    # Signature: pre-trade pool mid >0.5% from the contemporaneous fair, while the
+    # fill sat ~on that pushed mid (|pool-spread|<20 bps => a victim, not a
+    # self-mover). These ~0.7% of trades are MEV slippage, not the pool's
+    # mechanical impact, which is why they sit above the V2 curve. Visual call-out
+    # only — the fit (loaded from the JSON) and the binned-median curve are unchanged.
+    pool_mid = sample["pool_mid_pre_blended"].to_numpy()
+    fair_ct = sample["fair_price_blended"].to_numpy()
+    pool_spread = sample["observed_spread_pool_bps"].to_numpy()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pushed = np.abs(pool_mid / fair_ct - 1.0)
+    sandwiched = (pushed > 0.005) & (np.abs(pool_spread) < 20.0)
+
     # USD-weighted log-binned medians (each bin's median spread, weight = size_usd)
     s_clip = np.clip(size, 1.0, np.inf)
     edges = np.logspace(np.log10(max(s_clip.min(), 10)),
@@ -524,7 +539,11 @@ def plot_impact_curve_fit(ax: plt.Axes | None = None,
     if ax is None:
         _, ax = plt.subplots(figsize=(10, 5))
 
-    ax.scatter(size, spread, s=3, color="#bdc3c7", alpha=0.25, label="empirical (per-tx)")
+    ax.scatter(size[~sandwiched], spread[~sandwiched], s=3, color="#bdc3c7", alpha=0.25,
+               label="empirical (per-tx)")
+    ax.scatter(size[sandwiched], spread[sandwiched], s=12, color="#e74c3c", alpha=0.75,
+               edgecolor="none", zorder=5,
+               label=f"sandwiched — pool pushed off fair (n={int(sandwiched.sum())})")
     ax.plot(centers, medians, "o-", color="#2c3e50", lw=2, label="empirical (binned median)")
 
     sizes_fit = np.logspace(2, np.log10(size.max()), 200)
