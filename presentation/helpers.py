@@ -701,3 +701,176 @@ def get_validation_summary_table() -> pd.DataFrame:
         ("Submission pool depth", "$212.2M (frozen)",  "$212.2M (frozen)"),
     ]
     return pd.DataFrame(rows, columns=["Metric", "Real (on-chain)", "Simulator"])
+
+
+# ===================================================================
+# SECTION 7: Retail-sample robustness (conservative ↔ aggressive dial)
+# ===================================================================
+#
+# The strict cohort (Uniswap FE ∪ MetaMask) is a subset of true retail, so it is
+# the CONSERVATIVE anchor: lower arrival rate, thinner size tail. The broad
+# 19-router cohort is the AGGRESSIVE anchor: heavier tail (up to ~$7M), but mixes
+# in MM/whale/arb flow. Rather than pick one, we interpolate between them and let
+# the user dial the assumption.
+_STRICT_ARRIVAL = 98_676 / 216_000      # = config.EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE (strict 30d)
+_BROAD_ARRIVAL  = 857_035 / 1_303_200   # broad 19-router 6m
+_STRICT_BUY = 0.4627
+_BROAD_BUY  = 0.4413
+
+
+def load_broad_retail_quantiles() -> pd.DataFrame:
+    """Broad 19-router cohort (6m) parent-order USD size quantiles — the
+    'aggressive' robustness anchor (heavier tail incl. MM/whale flow)."""
+    df = pd.read_csv(ANALYSIS_DIR / "router_parent_order_size_windows.csv")
+    sel = df[(df["window_name"] == "6m") & (df["mode"] == "strict") & (df["side_group"] == "all")]
+    return sel[["pct", "size_usd"]].sort_values("pct").reset_index(drop=True)
+
+
+def interpolate_retail_inputs(aggressiveness: float):
+    """Interpolate retail sim inputs between the strict (conservative, a=0) and
+    broad 19-router (aggressive, a=1) anchors. Order sizes are log-interpolated
+    per percentile; arrival rate and buy share linearly. a may exceed 1 to
+    extrapolate past the broad cohort. Returns (arrival, buy_prob, quantiles_df)."""
+    a = float(max(aggressiveness, 0.0))
+    strict = load_strict_retail_quantiles().sort_values("pct").reset_index(drop=True)
+    broad = load_broad_retail_quantiles()
+    pct = strict["pct"].to_numpy()
+    ss = strict["size_usd"].to_numpy()
+    bs = np.interp(pct, broad["pct"].to_numpy(), broad["size_usd"].to_numpy())
+    eps = 1e-9
+    size = np.exp((1.0 - a) * np.log(np.maximum(ss, eps)) + a * np.log(np.maximum(bs, eps)))
+    arrival = (1.0 - a) * _STRICT_ARRIVAL + a * _BROAD_ARRIVAL
+    buy = (1.0 - a) * _STRICT_BUY + a * _BROAD_BUY
+    return arrival, buy, pd.DataFrame({"pct": pct, "size_usd": size})
+
+
+def run_retail_robustness(aggressiveness: float, seeds=(42, 43, 44), n_steps: int = 5000) -> dict:
+    """Run the §5 validation sim with retail inputs interpolated at `aggressiveness`
+    (0 = strict/conservative, 1 = broad/aggressive). (φ, D) stay at the calibrated
+    values and the normalizer is held at fair (as in validate_pool_mid.py). Returns
+    the three sim validation metrics."""
+    import os
+    import tempfile
+
+    from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
+    from arena_eval.exact_simple_amm.simulator import ExactSimpleAMMSimulator
+    from arena_eval.exact_simple_amm.strategies import FixedFeeStrategy
+
+    fit = load_impact_curve_fit()
+    phi = fit["plan_b"]["phi"]; depth = fit["plan_b"]["depth_usdc"]
+    arrival, buy, q = interpolate_retail_inputs(aggressiveness)
+
+    tf = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, newline="")
+    q.to_csv(tf.name, index=False); tf.close()
+
+    initial_price = 100.0
+    norm_y = depth; norm_x = norm_y / initial_price
+    frac = REAL_VIRTUAL_USDC / norm_y
+    vol_shares, fee_shares, usd, mkt = [], [], [], []
+    try:
+        for seed in seeds:
+            cfg = ExactSimpleAMMConfig(
+                n_steps=n_steps, initial_price=initial_price, initial_x=norm_x, initial_y=norm_y,
+                submission_liquidity_fraction=frac, evaluator_kind="real_data",
+                price_process_kind="regime_switching", retail_flow_kind="empirical_usd_size",
+                retail_arrival_rate=arrival, retail_buy_prob=buy,
+                regime_invcdf_path=str(ANALYSIS_DIR / "regimes_invcdf.csv"),
+                regime_transition_path=str(ANALYSIS_DIR / "regimes_transition_matrix.csv"),
+                retail_usd_quantiles_path=tf.name, normalizer_tracks_fair=True,
+            )
+            sim = ExactSimpleAMMSimulator(
+                config=cfg,
+                submission_strategy=FixedFeeStrategy(bid_fee=REAL_POOL_FEE, ask_fee=REAL_POOL_FEE),
+                normalizer_strategy=FixedFeeStrategy(bid_fee=phi, ask_fee=phi),
+                seed=seed,
+            )
+            pending: list = []
+            while not sim.done:
+                step = sim.step_once(); nf = step["fair_price"]
+                for ax_, ay_, side_, u_ in pending:
+                    if ay_ > 0:
+                        edge = (ax_ * nf - ay_) if side_ == "sell_x" else (ay_ - ax_ * nf)
+                        usd.append(u_); mkt.append(edge / ay_ * 1e4)
+                pending = []
+                for ev in step["trade_events"]:
+                    if ev["source"] != "retail" or ev["venue"] != "submission":
+                        continue
+                    pending.append((float(ev["amount_x"]), float(ev["amount_y"]),
+                                    str(ev["trader_side"]), float(ev["amount_y"])))
+            r = sim.result()
+            rs = r.retail_volume_submission_y; rn = r.retail_volume_normalizer_y
+            vol_shares.append(rs / max(rs + rn, 1e-12))
+            fee_shares.append((rs * REAL_POOL_FEE) / max(rs * REAL_POOL_FEE + rn * phi, 1e-12))
+    finally:
+        os.unlink(tf.name)
+    usd = np.asarray(usd); mkt = np.asarray(mkt)
+    return {
+        "aggressiveness": float(aggressiveness),
+        "arrival_rate": arrival,
+        "vol_share": float(np.mean(vol_shares)),
+        "fee_share": float(np.mean(fee_shares)),
+        "markout_bps": float((mkt * usd).sum() / usd.sum()) if usd.sum() > 0 else float("nan"),
+    }
+
+
+def plot_retail_robustness_sweep(ax: plt.Axes | None = None, alphas=None,
+                                 seeds=(42, 43, 44), n_steps: int = 5000) -> plt.Axes:
+    """Sweep the retail-aggressiveness dial 0→1 and plot how the sim's validation
+    metrics move. Shares on the left axis, markout on the right; dotted lines are
+    the strict-measured real targets."""
+    if alphas is None:
+        alphas = np.linspace(0.0, 1.0, 9)
+    res = [run_retail_robustness(a, seeds=seeds, n_steps=n_steps) for a in alphas]
+    a = np.array([r["aggressiveness"] for r in res])
+    vol = np.array([r["vol_share"] for r in res]) * 100
+    fee = np.array([r["fee_share"] for r in res]) * 100
+    mk = np.array([r["markout_bps"] for r in res])
+    real = load_validation()["real_targets"]
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(9, 5))
+    ax.plot(a, vol, "o-", color="#2c3e50", label="sim vol share @5bp")
+    ax.plot(a, fee, "s-", color="#8e44ad", label="sim fee share @5bp")
+    ax.axhline(real["retail_volume_share_5bp"] * 100, color="#2c3e50", ls=":", lw=1,
+               label=f"real vol {real['retail_volume_share_5bp']*100:.0f}%")
+    ax.axhline(real["retail_fee_share_5bp"] * 100, color="#8e44ad", ls=":", lw=1,
+               label=f"real fee {real['retail_fee_share_5bp']*100:.0f}%")
+    ax.set_xlabel("retail aggressiveness   (0 = strict / conservative,   1 = broad 19-router / aggressive)")
+    ax.set_ylabel("share at 5bp (%)")
+    ax.set_ylim(0, 100)
+
+    ax2 = ax.twinx()
+    ax2.plot(a, mk, "^-", color="#27ae60", label="sim markout_15s")
+    ax2.axhline(real["markout_15s_usd_w_mean_bps"], color="#27ae60", ls=":", lw=1,
+                label=f"real markout {real['markout_15s_usd_w_mean_bps']:+.0f} bps")
+    ax2.set_ylabel("USD-weighted markout_15s (bps)", color="#27ae60")
+    ax2.tick_params(axis="y", labelcolor="#27ae60")
+
+    ax.set_title("Retail-sample robustness: validation metrics vs aggressiveness",
+                 fontweight="bold", fontsize=12)
+    h1, l1 = ax.get_legend_handles_labels(); h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, fontsize=8, frameon=False, loc="center left")
+    ax.spines["top"].set_visible(False)
+    return ax
+
+
+def retail_robustness_slider(seeds=(42, 43, 44), n_steps: int = 5000):
+    """Interactive ipywidgets slider over retail aggressiveness (live in JupyterLab).
+    Drag to dial the retail-sample assumption; the sim re-runs and prints the
+    validation metrics. Static (nbconvert) renders the slider at its default (0)."""
+    from ipywidgets import FloatSlider, interact
+
+    real = load_validation()["real_targets"]
+
+    def _show(aggressiveness=0.0):
+        r = run_retail_robustness(aggressiveness, seeds=seeds, n_steps=n_steps)
+        print(f"aggressiveness = {aggressiveness:.2f}   (0 = strict/conservative, 1 = broad 19-router/aggressive)\n")
+        print(f"  retail arrival rate : {r['arrival_rate']:.3f}/block")
+        print(f"  vol share @5bp      : sim {r['vol_share']*100:5.1f}%    (real {real['retail_volume_share_5bp']*100:.1f}%)")
+        print(f"  fee share @5bp      : sim {r['fee_share']*100:5.1f}%    (real {real['retail_fee_share_5bp']*100:.1f}%)")
+        print(f"  markout_15s (USD-w) : sim {r['markout_bps']:+6.1f} bps  (real {real['markout_15s_usd_w_mean_bps']:+.1f} bps)")
+
+    interact(_show, aggressiveness=FloatSlider(
+        value=0.0, min=0.0, max=1.0, step=0.1, continuous_update=False,
+        description="aggressiveness", readout_format=".1f",
+        style={"description_width": "initial"}, layout={"width": "65%"}))
