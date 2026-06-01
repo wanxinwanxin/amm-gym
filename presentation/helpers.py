@@ -229,7 +229,7 @@ def plot_return_robustness(
 def load_parent_order_quantiles(
     window: str = "6m", mode: str = "strict", side: str = "all",
 ) -> pd.DataFrame:
-    """Load pre-computed parent-order USD size quantiles from BigQuery data."""
+    """Broad 19-router parent-order USD size quantiles (kept for robustness checks)."""
     path = ANALYSIS_DIR / "router_parent_order_size_windows.csv"
     df = pd.read_csv(path)
     sel = df[
@@ -238,6 +238,13 @@ def load_parent_order_quantiles(
         & (df["side_group"] == side)
     ][["pct", "size_usd", "parent_count"]].reset_index(drop=True)
     return sel
+
+
+def load_strict_retail_quantiles() -> pd.DataFrame:
+    """Strict-retail (Uniswap first-party FE ∪ MetaMask, 30d) parent-order USD size
+    quantiles — the distribution the simulator samples retail order sizes from
+    (parent_order_usd_quantiles.csv). This is the §2 "observed" series."""
+    return pd.read_csv(ANALYSIS_DIR / "parent_order_usd_quantiles.csv")
 
 
 def generate_challenge_retail_quantiles(
@@ -262,9 +269,9 @@ def generate_realistic_retail_quantiles(
     from arena_eval.exact_simple_amm.dynamics import EmpiricalUSDSizeRetailTrader
 
     trader = EmpiricalUSDSizeRetailTrader(
-        arrival_rate=857_035 / 1_303_200,  # cleaned 6m parent-order rate
+        arrival_rate=98_676 / 216_000,  # strict-retail 30d parent-order rate
         usd_quantiles_path=ANALYSIS_DIR / "parent_order_usd_quantiles.csv",
-        buy_prob=0.4413,
+        buy_prob=0.4627,
         seed=seed,
     )
     sizes = []
@@ -279,23 +286,17 @@ def generate_realistic_retail_quantiles(
 
 
 def get_arrival_rate_comparison() -> pd.DataFrame:
-    """Return a summary table comparing arrival rates across models."""
-    # Observed: from parent order data across all ETH/USDC pools
-    parent_df = pd.read_csv(ANALYSIS_DIR / "router_parent_order_size_windows.csv")
-    rows = []
-    for w in ["6m", "1y", "2y"]:
-        sel = parent_df[
-            (parent_df["window_name"] == w)
-            & (parent_df["mode"] == "strict")
-            & (parent_df["side_group"] == "all")
-        ].iloc[0]
-        days = sel["horizon_days"]
-        blocks = days * 24 * 3600 / 12
-        rate = sel["parent_count"] / blocks
-        rows.append({"source": f"Observed ({w})", "rate_per_block": rate, "orders": int(sel["parent_count"]), "blocks": int(blocks)})
-    rows.append({"source": "Challenge Model", "rate_per_block": 0.8, "orders": None, "blocks": None})
-    rows.append({"source": "Realistic Simulator (single-pool)", "rate_per_block": 186_085 / 645_123, "orders": None, "blocks": None})
-    rows.append({"source": "Realistic Simulator (cross-pool)", "rate_per_block": 857_035 / 1_303_200, "orders": None, "blocks": None})
+    """Arrival-rate comparison on the strict-retail cohort (Uniswap first-party FE
+    ∪ MetaMask, 30d window 2026-04-21..05-20) — the same cohort used for calibration
+    and validation. The realistic simulator matches the observed strict rate by
+    construction. (The broad 19-router 6m/1y/2y rates remain in
+    router_parent_order_size_windows.csv for robustness, but no longer drive this chart.)"""
+    strict_rate = 98_676 / 216_000  # = config.EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE
+    rows = [
+        {"source": "Observed (strict retail, 30d)", "rate_per_block": strict_rate, "orders": 98_676, "blocks": 216_000},
+        {"source": "Challenge Model", "rate_per_block": 0.8, "orders": None, "blocks": None},
+        {"source": "Realistic Simulator", "rate_per_block": strict_rate, "orders": None, "blocks": None},
+    ]
     return pd.DataFrame(rows)
 
 

@@ -15,15 +15,17 @@ DEFAULT_REGIME_TRANSITION_PATH = ANALYSIS_DIR / "regimes_transition_matrix.csv"
 DEFAULT_RETAIL_IMPACT_PERCENTILES_PATH = ANALYSIS_DIR / "percentiles.csv"
 DEFAULT_RETAIL_USD_QUANTILES_PATH = ANALYSIS_DIR / "parent_order_usd_quantiles.csv"
 EMPIRICAL_ROUTER_ARRIVAL_RATE = 186_085 / 645_123
-# Refreshed 2026-05-27 from cleaned retail_routers cohort (Wintermute MMs removed,
-# Odos/OpenOcean/LI.FI added). Old contaminated values were 1_294_178/1_303_200
-# (≈0.9931/block) and 0.4842 — Wintermute trades had inflated both the arrival
-# rate (Wintermute was ~34% of "parent orders") and the buy share. The cleaned
-# values come from router_parent_order_size_windows.csv (6m, strict, all):
-#   parent_count = 857_035, horizon_days = 181 -> 0.657639 / block
-#   buy_eth_n / (buy_eth_n + sell_eth_n) = 378_173 / 857_035 = 0.4413
-EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE = 857_035 / 1_303_200
-EMPIRICAL_PARENT_ORDER_BUY_PROB = 0.4413
+# Strict-retail cohort: Uniswap first-party FE (web/mobile/extension, via the
+# x-request-source surface tag in uniswap-labs.core.swaps) UNION MetaMask Swaps
+# (87.5bps fee) — the SAME cohort used for §4 calibration and §5 validation —
+# over the 30-day window 2026-04-21..2026-05-20. Replaces the broad 19-router
+# cohort (6m values were 857_035/1_303_200 ≈ 0.6576/block, buy_prob 0.4413; the
+# 19-router method is kept for robustness checks). From
+# analysis/weth_usdc_90d/sql/parent_order_size_strict_30d.sql:
+#   parent_count = 98_676, horizon_days = 30 -> 98_676/216_000 = 0.4568 / block
+#   buy_eth / (buy_eth + sell_eth) = 45_659 / 98_676 = 0.4627
+EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE = 98_676 / 216_000
+EMPIRICAL_PARENT_ORDER_BUY_PROB = 0.4627
 
 @dataclass(frozen=True)
 class ExactSimpleAMMConfig:

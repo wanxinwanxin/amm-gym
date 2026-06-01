@@ -14,21 +14,21 @@ and compares the three retail-only validation metrics to on-chain reality.
 
 | Metric | Real | Sim (mean ± std) |
 |--------|------|-------------------|
-| Volume share @5bp | 49.49% | 56.43% ± 4.76pp |
-| Fee share @5bp    | 17.15% | 74.67% ± 3.57pp |
+| Volume share @5bp | 45.89% | 48.90% ± 1.56pp |
+| Fee share @5bp    | 17.36% | 68.66% ± 1.35pp |
 
 ## Retail markout_15s on the 5bp pool — USD-weighted
 
 | Metric | Real (USD-w) | Sim (USD-w) |
 |--------|--------------|-------------|
-| mean   | +6.889 bps | +58.206 bps |
-| p1 | -9.39 | -6.44 |
-| p5 | -4.27 | -1.75 |
-| p25 | +2.83 | +3.45 |
-| p50 | +6.16 | +10.72 |
-| p75 | +10.07 | +35.47 |
-| p95 | +18.47 | +249.79 |
-| p99 | +23.53 | +249.79 |
+| mean   | +9.706 bps | +5.281 bps |
+| p1 | -6.11 | -11.51 |
+| p5 | -1.27 | -4.45 |
+| p25 | +3.58 | +0.88 |
+| p50 | +7.97 | +4.65 |
+| p75 | +13.39 | +10.06 |
+| p95 | +22.75 | +16.03 |
+| p99 | +64.30 | +23.11 |
 
 Convention: markout_15s is LP-positive (a positive value means LP profited
 from the trade after the 15-second look-ahead). Real data uses 15s; the sim

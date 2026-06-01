@@ -1,10 +1,10 @@
 metric,value
-window,2026-05-14..2026-05-20
-retail_volume_usd_5bp,26135464.77
-retail_volume_usd_other,26676399.16
-retail_volume_usd_total,52811863.92
-retail_fees_usd_5bp,5185.23
-retail_fees_usd_other,25045.80
-retail_fees_usd_total,30231.02
-retail_volume_share_5bp,0.494879
-retail_fee_share_5bp,0.171520
+window,2026-04-21..2026-05-20 (strict retail: Uniswap FE + MetaMask)
+retail_volume_usd_5bp,102514047.17
+retail_volume_usd_other,120854061.77
+retail_volume_usd_total,223368108.94
+retail_fees_usd_5bp,32250.05
+retail_fees_usd_other,153505.18
+retail_fees_usd_total,185755.23
+retail_volume_share_5bp,0.458947
+retail_fee_share_5bp,0.173616
