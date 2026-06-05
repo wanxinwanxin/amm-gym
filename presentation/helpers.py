@@ -471,6 +471,20 @@ def load_impact_curve_fit() -> dict:
     return json.loads((ANALYSIS_DIR / "impact_curve_fit_pool_mid.json").read_text())
 
 
+def load_allpools_impact_sample() -> pd.DataFrame:
+    """Full-market impact sample: strict-retail WETH/USDC trades across ALL venues
+    (Uniswap V3+V4+V2, Fluid, Swaap, Pancake, Balancer, Curve, …), incl. the 5bp
+    pool. Spread vs lagged fair; built from markout_prod (no pool-mid column)."""
+    return pd.read_csv(ANALYSIS_DIR / "allpools_impact_sample_30d.csv")
+
+
+def load_allpools_impact_fit() -> dict:
+    """V2 fit of the FULL-MARKET normalizer — the whole current ETH/USDC market a
+    new submission strategy competes against (5bp pool included, all venues)."""
+    import json
+    return json.loads((ANALYSIS_DIR / "impact_curve_fit_allpools.json").read_text())
+
+
 def load_validation() -> dict:
     """Validation payload from validate_pool_mid.py."""
     import json
@@ -496,32 +510,40 @@ def v2_spread_bps(size_usd: np.ndarray, phi: float, depth_usdc: float) -> np.nda
 
 def plot_impact_curve_fit(ax: plt.Axes | None = None,
                           plan_key: str = "plan_b",
-                          n_bins: int = 30) -> plt.Axes:
+                          n_bins: int = 30,
+                          sample: pd.DataFrame | None = None,
+                          fit: dict | None = None,
+                          title: str = "Non-5bp retail impact curve — empirical vs V2 fit") -> plt.Axes:
     """Empirical impact cloud (USD-weighted binned median) overlaid with the
     fitted V2 curve. Spread is referenced to the lagged (pre-trade) fair price —
-    the Binance mid one 12s step before each trade."""
-    sample = load_impact_curve_sample()
-    fit = load_impact_curve_fit()
+    the Binance mid one 12s step before each trade. Defaults to the §4 non-5bp
+    sample/fit; pass `sample`/`fit` to plot a different cohort (e.g. the
+    full-market all-venue sample). The red sandwich overlay is shown only when the
+    sample carries a pool-mid column (the all-venue markout_prod sample does not)."""
+    if sample is None:
+        sample = load_impact_curve_sample()
+    if fit is None:
+        fit = load_impact_curve_fit()
     plan = fit[plan_key]
     phi = plan["phi"]; depth = plan["depth_usdc"]
 
     size = sample["size_usd"].to_numpy()
     spread = sample["observed_spread_fair_lag_bps"].to_numpy()
 
-    # Flag sandwich / transient-MEV-excursion victims: trades that filled against a
-    # pool whose PRE-TRADE mid was already pushed off fair (a separate frontrun tx
-    # earlier in the block moved the pool; a backrun restores it within the block).
-    # Signature: pre-trade pool mid >0.5% from the contemporaneous fair, while the
-    # fill sat ~on that pushed mid (|pool-spread|<20 bps => a victim, not a
-    # self-mover). These ~0.7% of trades are MEV slippage, not the pool's
-    # mechanical impact, which is why they sit above the V2 curve. Visual call-out
-    # only — the fit (loaded from the JSON) and the binned-median curve are unchanged.
-    pool_mid = sample["pool_mid_pre_blended"].to_numpy()
-    fair_ct = sample["fair_price_blended"].to_numpy()
-    pool_spread = sample["observed_spread_pool_bps"].to_numpy()
-    with np.errstate(divide="ignore", invalid="ignore"):
-        pushed = np.abs(pool_mid / fair_ct - 1.0)
-    sandwiched = (pushed > 0.005) & (np.abs(pool_spread) < 20.0)
+    # Flag sandwich / transient-MEV-excursion victims (only if we have a pre-trade
+    # pool mid): trades that filled against a pool whose PRE-TRADE mid was already
+    # pushed off fair — pre-trade pool mid >0.5% from contemporaneous fair, while
+    # the fill sat ~on that pushed mid (|pool-spread|<20 bps). MEV slippage, not
+    # mechanical impact. Visual call-out only; the fit is unchanged.
+    has_pool_mid = {"pool_mid_pre_blended", "fair_price_blended",
+                    "observed_spread_pool_bps"}.issubset(sample.columns)
+    if has_pool_mid:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pushed = np.abs(sample["pool_mid_pre_blended"].to_numpy()
+                            / sample["fair_price_blended"].to_numpy() - 1.0)
+        sandwiched = (pushed > 0.005) & (np.abs(sample["observed_spread_pool_bps"].to_numpy()) < 20.0)
+    else:
+        sandwiched = np.zeros(len(size), dtype=bool)
 
     # USD-weighted log-binned medians (each bin's median spread, weight = size_usd)
     s_clip = np.clip(size, 1.0, np.inf)
@@ -542,9 +564,10 @@ def plot_impact_curve_fit(ax: plt.Axes | None = None,
 
     ax.scatter(size[~sandwiched], spread[~sandwiched], s=3, color="#bdc3c7", alpha=0.25,
                label="empirical (per-tx)")
-    ax.scatter(size[sandwiched], spread[sandwiched], s=12, color="#e74c3c", alpha=0.75,
-               edgecolor="none", zorder=5,
-               label=f"sandwiched — pool pushed off fair (n={int(sandwiched.sum())})")
+    if sandwiched.any():
+        ax.scatter(size[sandwiched], spread[sandwiched], s=12, color="#e74c3c", alpha=0.75,
+                   edgecolor="none", zorder=5,
+                   label=f"sandwiched — pool pushed off fair (n={int(sandwiched.sum())})")
     ax.plot(centers, medians, "o-", color="#2c3e50", lw=2, label="empirical (binned median)")
 
     sizes_fit = np.logspace(2, np.log10(size.max()), 200)
@@ -555,8 +578,7 @@ def plot_impact_curve_fit(ax: plt.Axes | None = None,
     ax.set_xscale("log")
     ax.set_xlabel("Trade size (USD)")
     ax.set_ylabel("Spread vs lagged fair (bps)")
-    ax.set_title("Non-5bp retail impact curve — empirical vs V2 fit",
-                 fontweight="bold", fontsize=12)
+    ax.set_title(title, fontweight="bold", fontsize=12)
     # The lagged-fair cloud has heavy ± tails (12s of price drift per trade);
     # clip the view so the binned-median curve and V2 fit stay legible.
     ax.set_ylim(-10, 60)

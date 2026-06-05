@@ -1,0 +1,18 @@
+{
+  "reference": "observed_spread_fair_lag_bps (lagged fair, 12s pre-trade)",
+  "universe": "ALL WETH/USDC venues (Uniswap V3+V4+V2, Fluid, Swaap, Pancake, Balancer, Curve, ...) via markout_prod",
+  "retail_filter": "strict: Uniswap FE (core.swaps) + MetaMask 87.5bps fee",
+  "window": "2026-04-21..2026-05-20",
+  "n_txs": 97900,
+  "plan_a": {
+    "method": "USD-weighted L2",
+    "phi": 0.0007975286700457174,
+    "depth_usdc": 343572465.3617317
+  },
+  "plan_b": {
+    "method": "USD-weighted Huber",
+    "huber_delta_bps": 14.878790232265475,
+    "phi": 0.0004652946062662673,
+    "depth_usdc": 275079816.58605474
+  }
+}
