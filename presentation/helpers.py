@@ -484,6 +484,71 @@ def load_impact_curve_fit() -> dict:
     return json.loads((ANALYSIS_DIR / "impact_curve_fit_pool_mid.json").read_text())
 
 
+def load_sandwich_victims() -> pd.DataFrame:
+    """All-venue WETH/USDC sandwich VICTIM swaps over the 30d window, reconstructed
+    from the Allium heuristic sandwich table (uniswap-allium.ethereum.dex_sandwich_trades):
+    swaps sitting between a front and back attacker leg on the same pool+block.
+    Columns: victim_tx, protocol, pool, usd_amount. The all-venue complement to the
+    V3-only pool-mid sandwich diagnostic (Chart 3b)."""
+    return pd.read_csv(ANALYSIS_DIR / "sandwich_victims_allvenue_30d.csv")
+
+
+def sandwich_census():
+    """(by_protocol, by_sample_venue) — the all-venue WETH/USDC sandwich-victim
+    census from the heuristic table, and how many of our strict-retail calibration
+    trades are sandwich victims, broken down by venue."""
+    vic = load_sandwich_victims()
+    by_protocol = (vic.groupby("protocol")
+                   .agg(victims=("victim_tx", "nunique"),
+                        usd_m=("usd_amount", lambda s: round(s.sum() / 1e6, 2)))
+                   .sort_values("victims", ascending=False).reset_index())
+    samp = load_impact_curve_sample()
+    f = samp[(samp["n_distinct_sides"] == 1) & (samp["size_usd"] > 1.0)
+             & np.isfinite(samp["observed_spread_fair_lag_bps"])].copy()
+    f["venue"] = _venue_labels(f["top_pool"], f["top_project"], f["observed_spread_fair_lag_bps"])
+    vset = set(vic["victim_tx"].str.lower())
+    f["v"] = f["tx_hash"].str.lower().isin(vset)
+    rows = []
+    for ven, sub in f.groupby("venue"):
+        vv = sub[sub["v"]]
+        rows.append(dict(venue=ven, n=len(sub), victims=int(sub["v"].sum()),
+                         victim_pct=round(100 * sub["v"].mean(), 2),
+                         med_spread_victim_bps=(round(float(vv["observed_spread_fair_lag_bps"].median()), 1)
+                                                if len(vv) else None)))
+    by_sample_venue = pd.DataFrame(rows).sort_values("victims", ascending=False).reset_index(drop=True)
+    return by_protocol, by_sample_venue
+
+
+def plot_sandwich_census(ax: plt.Axes | None = None) -> plt.Axes:
+    """Bar chart: % of our strict-retail trades that are sandwich victims, by venue
+    (Allium heuristic). Shows the non-V3 sandwiching — concentrated in Uniswap V4 —
+    that the V3-only Chart 3b cannot see, and that the fee-tier band (V2/Balancer/
+    Curve) is essentially un-sandwiched (so that band is fee, not MEV)."""
+    _, by_venue = sandwich_census()
+    d = by_venue[by_venue["n"] >= 50].copy()
+    short = {"Uniswap V3 1bp — wide-vs-fair tail (~1/3 sandwich, ~2/3 lag)": "V3 1bp wide-vs-fair tail",
+             "Uniswap V4 (all tiers, mostly low-fee)": "Uniswap V4",
+             "Uniswap V3 (incl. 1bp pool)": "Uniswap V3 (mass)",
+             "Uniswap V2 (30bp fee)": "Uniswap V2", "Balancer (~30bp)": "Balancer",
+             "Curve (~30bp)": "Curve", "other": "other"}
+    d["label"] = d["venue"].map(lambda v: short.get(v, v))
+    d = d.sort_values("victim_pct")
+    if ax is None:
+        _, ax = plt.subplots(figsize=(9, 4.5))
+    bars = ax.barh(d["label"], d["victim_pct"], color="#e74c3c", alpha=0.85)
+    for b, (_, r) in zip(bars, d.iterrows()):
+        ax.text(b.get_width() + 0.6, b.get_y() + b.get_height() / 2,
+                f"{int(r['victims'])} of {int(r['n']):,}", va="center", fontsize=8)
+    ax.set_xlabel("% of venue's strict-retail trades flagged as sandwich victims")
+    ax.set_title("All-venue sandwich census — non-V3 sandwiching is concentrated in Uniswap V4",
+                 fontweight="bold", fontsize=11)
+    ax.set_xlim(0, max(d["victim_pct"].max() * 1.25, 5))
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.tick_params(labelsize=9)
+    return ax
+
+
 def load_allpools_impact_sample() -> pd.DataFrame:
     """Full-market impact sample: strict-retail WETH/USDC trades across ALL venues
     (Uniswap V3+V4+V2, Fluid, Swaap, Pancake, Balancer, Curve, …), incl. the 5bp
