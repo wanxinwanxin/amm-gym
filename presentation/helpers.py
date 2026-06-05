@@ -684,11 +684,13 @@ def plot_impact_curve_by_venue(ax: plt.Axes | None = None,
                  "(◆ = per-venue median; they sit flat at their fee, not on the impact curve. V4 is mostly low-fee.)",
                  fontweight="bold", fontsize=10.5)
     ax.set_ylim(-10, 60)
-    # legend OUTSIDE the axes (top-right strip) so the dense scatter never covers it
+    _apply_style(ax)  # sets spines/ticks AND a default 'best' legend — override it below so ours wins
+    # legend OUTSIDE the axes (right strip) so the dense scatter never covers it.
+    # MUST come after _apply_style(), whose ax.legend() call would otherwise clobber
+    # this placement back to loc='best' (on top of the cloud).
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=8,
               framealpha=0.95, markerscale=1.6, borderaxespad=0.0)
     ax.figure.subplots_adjust(right=0.66)
-    _apply_style(ax)
     return ax
 
 
