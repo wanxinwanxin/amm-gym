@@ -599,6 +599,96 @@ def plot_impact_curve_fit(ax: plt.Axes | None = None,
     return ax
 
 
+# Well-known WETH/USDC venue addresses, used to split the "uniswap" project label
+# into V2/V3/V4 and to call out the prominent pools driving the elevated spread band.
+_V4_POOLMANAGER = "0x000000000004444c5dc75cb358380d2e3de08a90"  # Uniswap V4 singleton
+_V2_PAIR        = "0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc"  # Uniswap V2 USDC/WETH (30bp)
+_V3_1BP_POOL    = "0xe0554a476a092703abdb3ef35c80e0d76d32939f"  # Uniswap V3 1bp (sandwich-heavy)
+
+# venue label -> (color, z, point size, alpha). The Uniswap-V3 mass (incl. the 1bp
+# pool, which is the dominant non-5bp venue) is the grey calibration cloud, behind;
+# the 30bp fee-tier venues are highlighted on top, plus the 1bp pool's high-spread
+# subset (likely sandwich/MEV — 1bp fee can't produce >20 bps spread).
+_VENUE_STYLE = {
+    "Uniswap V3 (incl. 1bp pool)":          ("#cfd6dc", 1, 4,  0.25),
+    "Uniswap V4 (all tiers, mostly low-fee)": ("#8e44ad", 4, 9, 0.45),
+    "Uniswap V2 (30bp fee)":                ("#e67e22", 5, 14, 0.80),
+    "Balancer (~30bp)":                     ("#2980b9", 6, 22, 0.90),
+    "Curve (~30bp)":                        ("#16a085", 6, 22, 0.90),
+    "Uniswap V3 1bp — wide-vs-fair tail (~1/3 sandwich, ~2/3 lag)": ("#e74c3c", 7, 14, 0.80),
+    "other":                                ("#95a5a6", 3, 10, 0.5),
+}
+_VENUE_ORDER = list(_VENUE_STYLE.keys())
+
+
+def _venue_labels(top_pool, top_project, spread) -> np.ndarray:
+    """Vectorised venue+version label for each row (uses spread to split the 1bp
+    pool's likely-sandwich tail from its normal cheap flow)."""
+    tp = np.asarray([str(x).lower() for x in top_pool])
+    pj = np.asarray([str(x).lower() for x in top_project])
+    sp = np.asarray(spread, dtype=float)
+    out = np.full(len(tp), "other", dtype=object)
+    out[pj == "uniswap"] = "Uniswap V3 (incl. 1bp pool)"
+    out[pj == "balancer"] = "Balancer (~30bp)"
+    out[pj == "curve"] = "Curve (~30bp)"
+    out[tp == _V2_PAIR] = "Uniswap V2 (30bp fee)"
+    out[tp == _V4_POOLMANAGER] = "Uniswap V4 (all tiers, mostly low-fee)"
+    out[(tp == _V3_1BP_POOL) & (sp > 20.0)] = "Uniswap V3 1bp — wide-vs-fair tail (~1/3 sandwich, ~2/3 lag)"
+    return out
+
+
+def plot_impact_curve_by_venue(ax: plt.Axes | None = None,
+                               plan_key: str = "plan_b") -> plt.Axes:
+    """The all-non-5bp-venue impact cloud (Chart 3a) coloured by venue + version,
+    to show what makes up the elevated ~30 bps band above the V3 calibration mass.
+    The Uniswap-V3 bulk (incl. the 1bp pool, the dominant non-5bp venue) is grey,
+    behind; the 30bp fee-tier venues — Uniswap V2, the Uniswap V4 WETH/USDC pool,
+    Balancer and Curve — are highlighted (they sit ~flat at their fee, not on the
+    impact curve), plus the 1bp pool's high-spread tail (likely sandwich/MEV, since
+    a 1bp fee cannot produce >20 bps). Same data and V2 fit as Chart 3a."""
+    sample = load_impact_curve_sample()
+    fit = load_impact_curve_fit()
+    phi = fit[plan_key]["phi"]; depth = fit[plan_key]["depth_usdc"]
+
+    s = sample[(sample["n_distinct_sides"] == 1) & (sample["size_usd"] > 1.0)
+               & np.isfinite(sample["observed_spread_fair_lag_bps"])].copy()
+    s["venue"] = _venue_labels(s["top_pool"], s["top_project"],
+                               s["observed_spread_fair_lag_bps"])
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(12, 6))
+
+    # grey V3 mass first, highlighted venues on top (draw in style-z order)
+    for venue in _VENUE_ORDER:
+        m = (s["venue"] == venue).to_numpy()
+        if not m.any():
+            continue
+        color, z, size_pt, alpha = _VENUE_STYLE[venue]
+        ax.scatter(s.loc[m, "size_usd"], s.loc[m, "observed_spread_fair_lag_bps"],
+                   s=size_pt, color=color, alpha=alpha, edgecolor="none", zorder=z,
+                   label=f"{venue} (n={int(m.sum()):,})")
+        # bold median marker for the highlighted (non-grey, non-other) venues
+        if venue not in ("Uniswap V3 (incl. 1bp pool)", "other"):
+            ax.scatter([np.median(s.loc[m, "size_usd"])],
+                       [np.median(s.loc[m, "observed_spread_fair_lag_bps"])],
+                       s=120, color=color, edgecolor="black", lw=1.2, zorder=z + 1, marker="D")
+
+    sizes_fit = np.logspace(2, np.log10(s["size_usd"].max()), 200)
+    ax.plot(sizes_fit, v2_spread_bps(sizes_fit, phi, depth), "-", color="#2c3e50", lw=2.0,
+            zorder=8, label=f"V2 fit: φ={phi*1e4:.2f} bps, D=${depth/1e6:.1f}M")
+
+    ax.set_xscale("log")
+    ax.set_xlabel("Trade size (USD)")
+    ax.set_ylabel("Spread vs lagged fair (bps)")
+    ax.set_title("Chart 3a (by venue) — the elevated band is the 30bp fee tiers (V2 / Balancer / Curve)\n"
+                 "(◆ = per-venue median; they sit flat at their fee, not on the impact curve. V4 is mostly low-fee.)",
+                 fontweight="bold", fontsize=10.5)
+    ax.set_ylim(-10, 60)
+    ax.legend(loc="upper left", fontsize=7.5, framealpha=0.92, markerscale=1.4)
+    _apply_style(ax)
+    return ax
+
+
 def plot_retail_share_bars(ax: plt.Axes | None = None) -> plt.Axes:
     """Bar chart: retail volume share + retail fee share at 5bp pool, sim vs real."""
     v = load_validation()

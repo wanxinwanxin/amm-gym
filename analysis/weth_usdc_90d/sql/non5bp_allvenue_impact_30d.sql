@@ -20,6 +20,13 @@
 -- there is no reason to restrict to V3, and no pool-mid column is emitted.
 -- (Per-pool-mid sandwich detection therefore stays a V3-subset diagnostic.)
 --
+-- PER-TX PROTOCOL/POOL LABELS (for diagnostic coloring): top_project and top_pool
+-- are the protocol+version and pool ADDRESS carrying the most USD across the tx's
+-- non-5bp legs; top_project_usd_frac is that project's share of the tx's USD
+-- (1.0 = single-venue tx). These do not affect the fit (which uses only size_usd,
+-- observed_spread_fair_lag_bps, n_distinct_sides) — they let the chart color each
+-- dot by venue and call out prominent pools.
+--
 -- The fair grid is still built from ALL WETH/USDC benchmarks (incl. the 5bp pool's
 -- legs) — the Binance mid is a market-wide reference; only the CALIBRATION legs drop
 -- the 5bp pool. Cohort: strict retail (Uniswap FE ∪ MetaMask 87.5bps). 30d window.
@@ -136,6 +143,20 @@ legs AS (
     AND m.weth_amt > 0 AND m.usdc_amt > 0
     AND m.leg_usd IS NOT NULL AND m.leg_usd > 0
 ),
+-- Per-tx dominant protocol+version (most USD across the tx's non-5bp legs).
+proj_rank AS (
+  SELECT tx_hash, project AS top_project, SUM(leg_usd) AS proj_usd
+  FROM legs
+  GROUP BY tx_hash, project
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY SUM(leg_usd) DESC, project) = 1
+),
+-- Per-tx dominant pool address (most USD across the tx's non-5bp legs).
+pool_rank AS (
+  SELECT tx_hash, pool AS top_pool, ANY_VALUE(project) AS top_pool_project, SUM(leg_usd) AS pool_usd
+  FROM legs
+  GROUP BY tx_hash, pool
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY tx_hash ORDER BY SUM(leg_usd) DESC, pool) = 1
+),
 agg AS (
   SELECT
     tx_hash,
@@ -179,26 +200,32 @@ with_lag AS (
     ON gf.grid_ts = TIMESTAMP_SECONDS((DIV(UNIX_SECONDS(f.block_timestamp), 12) - 1) * 12)
 )
 SELECT
-  tx_hash,
-  block_timestamp,
-  size_usd,
-  n_legs,
-  n_distinct_pools,
-  n_distinct_venues,
-  side,
-  n_distinct_sides,
-  effective_exec_usdc_per_weth,
-  fair_price_blended,
-  fair_coverage_frac,
-  fair_lag_price,
+  w.tx_hash,
+  w.block_timestamp,
+  w.size_usd,
+  w.n_legs,
+  w.n_distinct_pools,
+  w.n_distinct_venues,
+  pr.top_project,
+  por.top_pool,
+  por.top_pool_project,
+  SAFE_DIVIDE(pr.proj_usd, w.size_usd) AS top_project_usd_frac,
+  w.side,
+  w.n_distinct_sides,
+  w.effective_exec_usdc_per_weth,
+  w.fair_price_blended,
+  w.fair_coverage_frac,
+  w.fair_lag_price,
   CASE
-    WHEN fair_price_blended IS NULL OR fair_price_blended = 0 THEN NULL
-    ELSE 10000.0 * (effective_exec_usdc_per_weth - fair_price_blended) * CAST(side AS FLOAT64) / fair_price_blended
+    WHEN w.fair_price_blended IS NULL OR w.fair_price_blended = 0 THEN NULL
+    ELSE 10000.0 * (w.effective_exec_usdc_per_weth - w.fair_price_blended) * CAST(w.side AS FLOAT64) / w.fair_price_blended
   END AS observed_spread_fair_bps,
   CASE
-    WHEN fair_lag_price IS NULL OR fair_lag_price = 0 THEN NULL
-    ELSE 10000.0 * (effective_exec_usdc_per_weth - fair_lag_price) * CAST(side AS FLOAT64) / fair_lag_price
+    WHEN w.fair_lag_price IS NULL OR w.fair_lag_price = 0 THEN NULL
+    ELSE 10000.0 * (w.effective_exec_usdc_per_weth - w.fair_lag_price) * CAST(w.side AS FLOAT64) / w.fair_lag_price
   END AS observed_spread_fair_lag_bps
-FROM with_lag
-WHERE side IS NOT NULL
-ORDER BY block_timestamp;
+FROM with_lag AS w
+LEFT JOIN proj_rank AS pr  ON pr.tx_hash  = w.tx_hash
+LEFT JOIN pool_rank AS por ON por.tx_hash = w.tx_hash
+WHERE w.side IS NOT NULL
+ORDER BY w.block_timestamp;
