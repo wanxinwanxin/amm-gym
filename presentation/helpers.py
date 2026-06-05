@@ -611,8 +611,8 @@ _V3_1BP_POOL    = "0xe0554a476a092703abdb3ef35c80e0d76d32939f"  # Uniswap V3 1bp
 # subset (likely sandwich/MEV — 1bp fee can't produce >20 bps spread).
 _VENUE_STYLE = {
     "Uniswap V3 (incl. 1bp pool)":          ("#cfd6dc", 1, 4,  0.25),
-    "Uniswap V4 (all tiers, mostly low-fee)": ("#8e44ad", 4, 9, 0.45),
-    "Uniswap V2 (30bp fee)":                ("#e67e22", 5, 14, 0.80),
+    "Uniswap V4 (all tiers, mostly low-fee)": ("#9b59b6", 4, 7, 0.30),
+    "Uniswap V2 (30bp fee)":                ("#e67e22", 5, 7, 0.30),
     "Balancer (~30bp)":                     ("#2980b9", 6, 22, 0.90),
     "Curve (~30bp)":                        ("#16a085", 6, 22, 0.90),
     "Uniswap V3 1bp — wide-vs-fair tail (~1/3 sandwich, ~2/3 lag)": ("#e74c3c", 7, 14, 0.80),
@@ -684,7 +684,10 @@ def plot_impact_curve_by_venue(ax: plt.Axes | None = None,
                  "(◆ = per-venue median; they sit flat at their fee, not on the impact curve. V4 is mostly low-fee.)",
                  fontweight="bold", fontsize=10.5)
     ax.set_ylim(-10, 60)
-    ax.legend(loc="upper left", fontsize=7.5, framealpha=0.92, markerscale=1.4)
+    # legend OUTSIDE the axes (top-right strip) so the dense scatter never covers it
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=8,
+              framealpha=0.95, markerscale=1.6, borderaxespad=0.0)
+    ax.figure.subplots_adjust(right=0.66)
     _apply_style(ax)
     return ax
 
