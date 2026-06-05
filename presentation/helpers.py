@@ -459,10 +459,23 @@ REAL_VIRTUAL_USDC = 212_157_626.44
 
 
 def load_impact_curve_sample() -> pd.DataFrame:
-    """Empirical router-routed non-5bp WETH/USDC impact sample
-    (size, spread vs pool_mid_pre). 7d window, V3 only."""
-    path = ANALYSIS_DIR / "non5bp_impact_sample_v3_pool_mid_7d.csv"
-    return pd.read_csv(path)
+    """§4 normalizer calibration sample: strict-retail impact across ALL non-5bp
+    WETH/USDC venues (Uniswap V3+V4+V2, Fluid, Balancer, Curve, …) — the true
+    competitor of the held-out 5bp pool. Spread vs lagged fair, from markout_prod
+    (no pool-mid column). 30d window."""
+    return pd.read_csv(ANALYSIS_DIR / "non5bp_allvenue_impact_30d.csv")
+
+
+def load_impact_curve_sample_v3() -> pd.DataFrame:
+    """V3-only non-5bp sample — kept for the sandwich diagnostic, which needs
+    per-pool sqrtPrice mids (only V3 carries them)."""
+    return pd.read_csv(ANALYSIS_DIR / "non5bp_impact_sample_v3_pool_mid_7d.csv")
+
+
+def load_impact_curve_fit_v3() -> dict:
+    """V2 fit of the V3-only non-5bp sample (for the sandwich diagnostic chart)."""
+    import json
+    return json.loads((ANALYSIS_DIR / "impact_curve_fit_v3nonsbp.json").read_text())
 
 
 def load_impact_curve_fit() -> dict:
@@ -513,7 +526,7 @@ def plot_impact_curve_fit(ax: plt.Axes | None = None,
                           n_bins: int = 30,
                           sample: pd.DataFrame | None = None,
                           fit: dict | None = None,
-                          title: str = "Non-5bp retail impact curve — empirical vs V2 fit") -> plt.Axes:
+                          title: str = "Retail impact curve (all non-5bp venues) — empirical vs V2 fit") -> plt.Axes:
     """Empirical impact cloud (USD-weighted binned median) overlaid with the
     fitted V2 curve. Spread is referenced to the lagged (pre-trade) fair price —
     the Binance mid one 12s step before each trade. Defaults to the §4 non-5bp

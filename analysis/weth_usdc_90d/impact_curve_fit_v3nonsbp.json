@@ -1,0 +1,18 @@
+{
+  "reference": "observed_spread_fair_lag_bps (lagged fair)",
+  "universe": "non-5bp WETH/USDC V3 only (diagnostic: has per-pool sqrtPrice mids for sandwich detection)",
+  "retail_filter": "strict: Uniswap FE (core.swaps) + MetaMask 87.5bps fee",
+  "window": "2026-04-21..2026-05-20",
+  "n_txs": 69627,
+  "plan_a": {
+    "method": "USD-weighted L2",
+    "phi": 0.0008076241776553295,
+    "depth_usdc": 63897339.60780315
+  },
+  "plan_b": {
+    "method": "USD-weighted Huber",
+    "huber_delta_bps": 9.836431746812877,
+    "phi": 0.00021817132829309938,
+    "depth_usdc": 63913448.08588455
+  }
+}

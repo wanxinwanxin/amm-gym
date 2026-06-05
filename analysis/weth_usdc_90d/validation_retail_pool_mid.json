@@ -7,10 +7,10 @@
   },
   "calibrated_normalizer": {
     "plan": "plan_b",
-    "phi": 0.00021817132829309938,
-    "phi_bps": 2.181713282930994,
-    "depth_usdc": 63913448.08588455,
-    "depth_usdc_m": 63.913448085884546
+    "phi": 0.0003674714156448905,
+    "phi_bps": 3.6747141564489048,
+    "depth_usdc": 73391257.50884138,
+    "depth_usdc_m": 73.39125750884138
   },
   "real_targets": {
     "retail_volume_share_5bp": 0.458947,
@@ -31,79 +31,79 @@
     }
   },
   "sim_results": {
-    "retail_volume_share_mean": 0.48895574338992775,
-    "retail_volume_share_std": 0.01555164985983257,
-    "retail_fee_share_mean": 0.6866212812338846,
-    "retail_fee_share_std": 0.013503555080361208,
-    "markout_usd_w_mean_bps": 5.2809037029187005,
+    "retail_volume_share_mean": 0.5508503071742719,
+    "retail_volume_share_std": 0.010236087739628348,
+    "retail_fee_share_mean": 0.6252616505915273,
+    "retail_fee_share_std": 0.009683357749442567,
+    "markout_usd_w_mean_bps": 5.017520892250657,
     "markout_usd_w_quantiles_bps": {
-      "1": -11.514671799605237,
+      "1": -11.746210890704097,
       "2": -8.40165424617284,
-      "5": -4.445540272304746,
-      "10": -1.9237947993451188,
-      "25": 0.8779534844627681,
-      "50": 4.654048416496131,
-      "75": 10.061607413214734,
-      "90": 15.478245914266413,
-      "95": 16.031539185583274,
-      "98": 23.1097271970061,
-      "99": 23.1097271970061
+      "5": -4.188421323887834,
+      "10": -1.7704156247851959,
+      "25": 1.0312924765315254,
+      "50": 4.42760332127842,
+      "75": 9.132508338692109,
+      "90": 13.626703166392863,
+      "95": 15.628614876663537,
+      "98": 22.849741745711604,
+      "99": 22.849741745711604
     },
     "per_seed": [
       {
         "seed": 42,
-        "retail_volume_sub_y": 2127620.314539601,
-        "retail_volume_norm_y": 2472543.8580119223,
-        "retail_fees_sub_y": 1063.8101572698006,
-        "retail_fees_norm_y": 539.4381777654056,
-        "arb_volume_sub_y": 32583234.92841111,
+        "retail_volume_sub_y": 2482205.9697444085,
+        "retail_volume_norm_y": 2117820.951646926,
+        "retail_fees_sub_y": 1241.1029848722044,
+        "retail_fees_norm_y": 778.238663184105,
+        "arb_volume_sub_y": 32544441.60217825,
         "arb_volume_norm_y": 0.0,
-        "retail_volume_share": 0.4625096485109784,
-        "retail_fee_share": 0.6635342348547894
+        "retail_volume_share": 0.5396068353864405,
+        "retail_fee_share": 0.6146077292402757
       },
       {
         "seed": 43,
-        "retail_volume_sub_y": 2167396.009721433,
-        "retail_volume_norm_y": 2192619.322409554,
-        "retail_fees_sub_y": 1083.6980048607165,
-        "retail_fees_norm_y": 478.3666700112079,
-        "arb_volume_sub_y": 70344500.6186496,
+        "retail_volume_sub_y": 2449313.739127175,
+        "retail_volume_norm_y": 1910574.9933400971,
+        "retail_fees_sub_y": 1224.6568695635874,
+        "retail_fees_norm_y": 702.0816974984127,
+        "arb_volume_sub_y": 70290044.60950337,
         "arb_volume_norm_y": 0.0,
-        "retail_volume_share": 0.4971074284415654,
-        "retail_fee_share": 0.6937600102566626
+        "retail_volume_share": 0.5617835429807178,
+        "retail_fee_share": 0.6356113333170121
       },
       {
         "seed": 44,
-        "retail_volume_sub_y": 2057160.881857505,
-        "retail_volume_norm_y": 2220558.820953516,
-        "retail_fees_sub_y": 1028.5804409287525,
-        "retail_fees_norm_y": 484.4622675203872,
-        "arb_volume_sub_y": 54560884.084647894,
+        "retail_volume_sub_y": 2327508.759112864,
+        "retail_volume_norm_y": 1950072.9584703187,
+        "retail_fees_sub_y": 1163.754379556432,
+        "retail_fees_norm_y": 716.5960706599077,
+        "arb_volume_sub_y": 54506765.271647856,
         "arb_volume_norm_y": 0.0,
-        "retail_volume_share": 0.48090128030260637,
-        "retail_fee_share": 0.679809257983895
+        "retail_volume_share": 0.5441178948249054,
+        "retail_fee_share": 0.6189029174973946
       },
       {
         "seed": 45,
-        "retail_volume_sub_y": 2284884.594798789,
-        "retail_volume_norm_y": 2229862.561034867,
-        "retail_fees_sub_y": 1142.4422973993944,
-        "retail_fees_norm_y": 486.49207685202936,
-        "arb_volume_sub_y": 71615881.05306812,
+        "retail_volume_sub_y": 2548792.620885464,
+        "retail_volume_norm_y": 1965820.259891457,
+        "retail_fees_sub_y": 1274.3963104427319,
+        "retail_fees_norm_y": 722.3827538057202,
+        "arb_volume_sub_y": 71582764.86935374,
         "arb_volume_norm_y": 0.0,
-        "retail_volume_share": 0.5060935897254872,
-        "retail_fee_share": 0.7013433539484384
+        "retail_volume_share": 0.5645650442672819,
+        "retail_fee_share": 0.6382259976881265
       },
       {
         "seed": 46,
-        "retail_volume_sub_y": 2929260.200135552,
-        "retail_volume_norm_y": 2950819.276698737,
-        "retail_fees_sub_y": 1464.6301000677759,
-        "retail_fees_norm_y": 643.7841611502462,
-        "arb_volume_sub_y": 69516501.43408178,
+        "retail_volume_sub_y": 3199721.004718288,
+        "retail_volume_norm_y": 2680192.7743659043,
+        "retail_fees_sub_y": 1599.860502359144,
+        "retail_fees_norm_y": 984.8942329974454,
+        "arb_volume_sub_y": 69417187.47687037,
         "arb_volume_norm_y": 0.0,
-        "retail_volume_share": 0.49816676996900117,
-        "retail_fee_share": 0.6946595491256378
+        "retail_volume_share": 0.5441782184120139,
+        "retail_fee_share": 0.6189602752148278
       }
     ]
   },
