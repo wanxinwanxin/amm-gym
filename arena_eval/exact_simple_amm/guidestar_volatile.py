@@ -42,15 +42,19 @@ class GuidestarVolatileStrategy:
     """Guidestar volatile dynamic-fee strategy. Parameters in friendly units;
     see the contract's ``HookParams`` for the on-chain equivalents."""
 
-    fee_init_bps: float = 3.0              # minimum fee per side (bps); floor total = 2*feeInit
-    alpha: float = 8000.0                  # contract alpha: perm increase = alpha*impact*100 (millionths)
-    max_perm_growth: float = 8.0           # cap: max perm increase/block = (buyP+sellP)*max_perm_growth/16
-    trans_decline: float = 0.5             # transitory linear decline per block (fraction in [0,1])
-    k_perm: float = 0.7                    # permanent decay factor/block toward floor, gaps <=4 blocks (in (0,1))
+    # Defaults = the mainnet Guidestar4 VOLATILE deployment
+    # (guidestar-hooks/script/DeployGuidestar4.s.sol::defaultHookParams):
+    #   feeInit=350, alpha=90*100, maxPermGrowth=1<<4, transDecline=(10<<24)/100,
+    #   k=(99<<24)/100, logKPerm=(10050*1e12)>>40 (=-ln(0.99)), maxPriceImprovement=1000.
+    fee_init_bps: float = 3.5              # minimum fee per side (bps); floor total = 2*feeInit
+    alpha: float = 9000.0                  # contract alpha: perm increase = alpha*impact*100 (millionths)
+    max_perm_growth: float = 16.0          # cap: max perm increase/block = (buyP+sellP)*max_perm_growth/16
+    trans_decline: float = 0.10            # transitory linear decline per block (fraction in [0,1])
+    k_perm: float = 0.99                   # permanent decay factor/block toward floor, gaps <=4 blocks (in (0,1))
     logk_perm: float | None = None         # per-block perm-decay exponent for gaps >4 blocks (factor=exp(-logk_perm)).
                                            #   None => derive from k_perm (self-consistent single rate). The contract
                                            #   stores k and logKPerm separately and they can differ slightly.
-    max_price_improvement_bps: float = 0.0 # sandwich-protection slack (bps)
+    max_price_improvement_bps: float = 10.0  # sandwich-protection slack (bps)
     enable_sandwich_protection: bool = True
     # On-chain HookParams -> these friendly units (for ingesting a real deployment):
     #   fee_init_bps  = feeInit / 100                  (feeInit is millionths)
