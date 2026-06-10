@@ -21,6 +21,28 @@ class TradeInfo:
 
 
 @dataclass(frozen=True)
+class IncomingSwap:
+    """Information exposed to fee strategies *before* a swap executes — the
+    simulator analog of a Uniswap v4 ``beforeSwap`` call. Lets a strategy price
+    the swap from the pool's current state and the incoming swap's direction/size
+    (which ``after_swap`` cannot see, since it fires post-execution on the
+    completed trade).
+
+    is_buy:   the incoming swap buys token x (retail buy / arb buying x).
+    size:     swap notional in y (USD). ``None`` when endogenous (e.g. arb size,
+              which the arbitrageur derives from the fee this call returns).
+    reserve_x/reserve_y: the pool's reserves right now (spot = reserve_y/reserve_x).
+    block:    the step index, treated as the block number for per-block logic.
+    """
+
+    is_buy: bool
+    size: float | None
+    reserve_x: float
+    reserve_y: float
+    block: int
+
+
+@dataclass(frozen=True)
 class SimulationResult:
     """Aggregate result for one challenge-faithful simulation."""
 

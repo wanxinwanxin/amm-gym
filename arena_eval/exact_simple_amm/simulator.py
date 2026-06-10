@@ -9,7 +9,7 @@ from typing import Iterable
 
 import numpy as np
 
-from arena_eval.core.types import BatchResult, SimulationResult, TradeInfo
+from arena_eval.core.types import BatchResult, IncomingSwap, SimulationResult, TradeInfo
 from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
 from arena_eval.exact_simple_amm.dynamics import EmpiricalImpactRetailTrader, EmpiricalUSDSizeRetailTrader, RegimeSwitchingReturnProcess
 from arena_eval.exact_simple_amm.strategies import ExactSimpleAMMStrategy, FixedFeeStrategy
@@ -140,6 +140,25 @@ class StrategyAMM:
             self.bid_fee,
             self.ask_fee,
             lambda: self.strategy.after_initialize(self.reserve_x, self.reserve_y),
+        )
+
+    def before_swap(self, *, is_buy: bool, size: float | None, block: int) -> None:
+        """Pre-swap fee hook (v4 ``beforeSwap`` analog). Sets bid/ask from the
+        strategy's quote for the incoming swap, BEFORE the routing split / arb
+        sizing uses them. No-op for strategies that do not implement it (the
+        post-swap ``after_swap`` path then drives fees exactly as before)."""
+        hook = getattr(self.strategy, "before_swap", None)
+        if hook is None:
+            return
+        incoming = IncomingSwap(
+            is_buy=is_buy,
+            size=size,
+            reserve_x=self.reserve_x,
+            reserve_y=self.reserve_y,
+            block=int(block),
+        )
+        self.bid_fee, self.ask_fee = _safe_strategy_fees(
+            self.bid_fee, self.ask_fee, lambda: hook(incoming)
         )
 
     def quote_buy_x(self, amount_x: float) -> tuple[float, float]:
@@ -324,6 +343,11 @@ class OrderRouter:
     ) -> list[RoutedTrade]:
         trades: list[RoutedTrade] = []
         for order in orders:
+            # Pre-swap hook on both venues before the split, so each pool's quote
+            # for this order feeds the routing decision and the execution.
+            is_buy = order.side == "buy"
+            submission.before_swap(is_buy=is_buy, size=order.size, block=timestamp)
+            normalizer.before_swap(is_buy=is_buy, size=order.size, block=timestamp)
             if order.side == "buy":
                 y_submission, y_normalizer = self.split_buy_two_amms(submission, normalizer, order.size)
                 if y_submission > MIN_AMOUNT:
@@ -682,6 +706,11 @@ class ExactSimpleAMMSimulator:
                 "normalizer_ask_fee": self.normalizer.ask_fee,
             }
 
+        # Pre-swap hook for the arb (the block's first swap): the strategy prices
+        # it from current state before the arbitrageur sizes it against the fee.
+        self.submission.before_swap(
+            is_buy=self.submission.spot_price < fair_price, size=None, block=timestamp
+        )
         submission_arb = self.arbitrageur.execute_arb(self.submission, fair_price, timestamp)
         if submission_arb is not None:
             pre_metrics = metric_snapshot()
@@ -725,6 +754,9 @@ class ExactSimpleAMMSimulator:
             # no arb accounting (normalizer edge/PnL are not validation targets).
             self._resync_normalizer_to_fair(fair_price)
         else:
+            self.normalizer.before_swap(
+                is_buy=self.normalizer.spot_price < fair_price, size=None, block=timestamp
+            )
             normalizer_arb = self.arbitrageur.execute_arb(self.normalizer, fair_price, timestamp)
             if normalizer_arb is not None:
                 pre_metrics = metric_snapshot()
