@@ -46,9 +46,20 @@ class GuidestarVolatileStrategy:
     alpha: float = 8000.0                  # contract alpha: perm increase = alpha*impact*100 (millionths)
     max_perm_growth: float = 8.0           # cap: max perm increase/block = (buyP+sellP)*max_perm_growth/16
     trans_decline: float = 0.5             # transitory linear decline per block (fraction in [0,1])
-    k_perm: float = 0.7                    # permanent decay factor/block toward floor (in (0,1))
+    k_perm: float = 0.7                    # permanent decay factor/block toward floor, gaps <=4 blocks (in (0,1))
+    logk_perm: float | None = None         # per-block perm-decay exponent for gaps >4 blocks (factor=exp(-logk_perm)).
+                                           #   None => derive from k_perm (self-consistent single rate). The contract
+                                           #   stores k and logKPerm separately and they can differ slightly.
     max_price_improvement_bps: float = 0.0 # sandwich-protection slack (bps)
     enable_sandwich_protection: bool = True
+    # On-chain HookParams -> these friendly units (for ingesting a real deployment):
+    #   fee_init_bps  = feeInit / 100                  (feeInit is millionths)
+    #   alpha         = alpha                          (same scalar)
+    #   max_perm_growth = maxPermGrowth                (same integer; cap uses >>4 == /16)
+    #   trans_decline = transDecline / 2**24           (X24 fraction -> [0,1] per block)
+    #   k_perm        = k / 2**24                       (X24 fixed point -> factor in (0,1))
+    #   logk_perm     = logKPerm * 2**40 / 1e18         (wad exponent the contract feeds expWad)
+    #   max_price_improvement_bps = maxPriceImprovement / 100
 
     # internal state (millionths), not constructor args
     _feeInit: float = field(default=0.0, init=False)
@@ -65,7 +76,12 @@ class GuidestarVolatileStrategy:
         self._feeInit = float(self.fee_init_bps) * 100.0
         self._buyPerm = self._sellPerm = self._feeInit
         self._buyTrans = self._sellTrans = 0.0
-        self._logk = -math.log(self.k_perm) if 0.0 < self.k_perm < 1.0 else 0.0
+        if self.logk_perm is not None:
+            self._logk = float(self.logk_perm)
+        elif 0.0 < self.k_perm < 1.0:
+            self._logk = -math.log(self.k_perm)
+        else:
+            self._logk = 0.0
         self._maxPI = float(self.max_price_improvement_bps) * 100.0
 
     # ---- strategy interface -------------------------------------------------
