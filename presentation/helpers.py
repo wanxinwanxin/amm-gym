@@ -1069,3 +1069,191 @@ def retail_robustness_slider(seeds=(42, 43, 44), n_steps: int = 5000):
         value=0.0, min=0.0, max=1.0, step=0.1, continuous_update=False,
         description="aggressiveness", readout_format=".1f",
         style={"description_width": "initial"}, layout={"width": "65%"}))
+
+
+# ===================================================================
+# SECTION 9: Guidestar-volatile new-strategy backtest (plots cached results)
+# Cache produced offline by scripts/calibration/guidestar_backtest.py.
+# ===================================================================
+GS_COLORS = {
+    "Guidestar (real params, 3.5bp floor)": "#8e44ad",
+    "flat 3.5bp (=feeInit, dynamics off)": "#e67e22",
+    "flat 5bp (incumbent)": "#2980b9",
+}
+
+
+def _gs_bare(ax: plt.Axes) -> None:
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(alpha=0.25)
+    ax.tick_params(labelsize=9)
+
+
+def _gs_short(nm: str) -> str:
+    return nm.split(" (")[0]
+
+
+def plot_guidestar_dynamics(scenario: dict | None = None):
+    """Drive the actual GuidestarVolatileStrategy (real mainnet volatile params) through
+    a scripted price path via its before_swap hook, and plot the resulting fee state:
+    the price path, the total buy/sell fee, and the four perm/trans components. One
+    step = one block. Visualizes the fee mechanics, not a backtest."""
+    from arena_eval.core.types import IncomingSwap
+    from arena_eval.exact_simple_amm.guidestar_volatile import GuidestarVolatileStrategy
+    events = (scenario or {}).get("events", {6: (0.020, True), 7: (0.009, True),
+                                             28: (0.025, False), 29: (0.007, False)})
+    n = (scenario or {}).get("n_blocks", 64)
+    s = GuidestarVolatileStrategy()                       # real mainnet volatile defaults
+    s.after_initialize(1.0, 100.0)
+    spot = 100.0
+    rec = {k: [] for k in ["price", "buyP", "buyT", "sellP", "sellT", "bid", "ask"]}
+    for blk in range(n):
+        imp, up = events.get(blk, (0.0, True))
+        if blk in events:
+            spot *= (1 + imp) if up else (1 - imp)
+        bid, ask = s.before_swap(IncomingSwap(is_buy=up, size=None, reserve_x=1.0, reserve_y=spot, block=blk))
+        rec["price"].append(spot)
+        rec["buyP"].append(s._buyPerm / 100); rec["buyT"].append(s._buyTrans / 100)
+        rec["sellP"].append(s._sellPerm / 100); rec["sellT"].append(s._sellTrans / 100)
+        rec["bid"].append(bid * 1e4); rec["ask"].append(ask * 1e4)
+    B = np.arange(n)
+    fig, ax = plt.subplots(3, 1, figsize=(11, 8.5), sharex=True,
+                           gridspec_kw={"height_ratios": [1, 1.3, 1.3]})
+    ax[0].plot(B, rec["price"], color="#2c3e50", lw=2, marker="o", ms=2); ax[0].set_ylabel("ETH price (fair)")
+    ax[0].set_title("Guidestar volatile fee mechanics (real mainnet params, 1 step = 1 block)", fontweight="bold")
+    for b, (imp, up) in events.items():
+        ax[0].annotate(("buy +" if up else "sell −") + f"{imp*100:.1f}%", (b, rec["price"][b]),
+                       textcoords="offset points", xytext=(0, 11 if up else -16), ha="center", fontsize=8,
+                       color="#c0392b" if up else "#2980b9")
+    ax[1].plot(B, rec["ask"], color="#c0392b", lw=2.3, label="buy fee (ask) = buyPerm+buyTrans")
+    ax[1].plot(B, rec["bid"], color="#2980b9", lw=2.3, label="sell fee (bid) = sellPerm+sellTrans")
+    ax[1].axhline(2 * 3.5, color="grey", ls=":", label="floor 2·feeInit = 7 bps")
+    ax[1].set_ylabel("total fee (bps)"); ax[1].legend(fontsize=8)
+    ax[2].plot(B, rec["buyP"], color="#c0392b", lw=2, label="buy permanent")
+    ax[2].plot(B, rec["buyT"], color="#e67e22", lw=2, ls="--", label="buy transitory")
+    ax[2].plot(B, rec["sellP"], color="#2980b9", lw=2, label="sell permanent")
+    ax[2].plot(B, rec["sellT"], color="#16a085", lw=2, ls="--", label="sell transitory")
+    ax[2].set_ylabel("component (bps)"); ax[2].set_xlabel("block"); ax[2].legend(fontsize=8, ncol=2)
+    for a in ax:
+        a.grid(alpha=0.25); a.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    return fig
+
+
+def load_guidestar_backtest() -> dict:
+    """Cached Guidestar new-pool backtest results (analysis/.../guidestar_backtest_cache.json)."""
+    import json
+    return json.loads((ANALYSIS_DIR / "guidestar_backtest_cache.json").read_text())
+
+
+def plot_gs_cumulative(cache: dict | None = None):
+    """Cumulative 15s-forward LP markout ($) over the run, mean±sd over seeds, at the
+    primary depth — total, and split into retail (+) and arb/LVR (−) components."""
+    if cache is None:
+        cache = load_guidestar_backtest()
+    x = np.array(cache["cumulative_steps"])
+    order = cache["meta"]["pool_order"]
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4), sharex=True)
+    comps = [("tot", "TOTAL LP markout"), ("ret", "Retail markout (+)"), ("arb", "Arb / LVR markout (−)")]
+    for nm in order:
+        for j, (c, _) in enumerate(comps):
+            d = cache["cumulative"][nm][c]
+            mean = np.array(d["mean"]); sd = np.array(d["sd"])
+            ax[j].plot(x, mean, color=GS_COLORS[nm], lw=2, label=_gs_short(nm))
+            ax[j].fill_between(x, mean - sd, mean + sd, color=GS_COLORS[nm], alpha=0.12)
+    for j, (_, ttl) in enumerate(comps):
+        ax[j].set_title(ttl, fontsize=11, fontweight="bold"); ax[j].set_xlabel("step (12s)")
+        ax[j].axhline(0, color="grey", lw=0.7); _gs_bare(ax[j])
+    ax[0].set_ylabel("cumulative markout ($)"); ax[0].legend(fontsize=8, loc="upper left")
+    d_m = cache["meta"]["primary_depth"] / 1e6
+    fig.suptitle(f"§9 — new ${d_m:.1f}M pool vs §8 normalizer: cumulative 15s-forward LP markout "
+                 f"(mean±sd, {cache['meta']['seeds']} seeds, real volatile params)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def plot_gs_histograms(cache: dict | None = None):
+    """Per-trade 15s markout (bps) distribution at the primary depth (log + linear)."""
+    if cache is None:
+        cache = load_guidestar_backtest()
+    bins = np.array(cache["histogram"]["bins"])
+    ctr = 0.5 * (bins[:-1] + bins[1:])
+    fig, ax = plt.subplots(1, 2, figsize=(13, 4.4))
+    for nm in cache["meta"]["pool_order"]:
+        dens = np.array(cache["histogram"][nm])
+        ax[0].plot(ctr, dens, drawstyle="steps-mid", lw=2, color=GS_COLORS[nm], label=_gs_short(nm))
+        ax[1].plot(ctr, dens, drawstyle="steps-mid", lw=2, color=GS_COLORS[nm])
+    ax[0].set_yscale("log"); ax[0].set_title("per-trade markout (bps) — log density (tails)", fontsize=11, fontweight="bold")
+    ax[1].set_title("per-trade markout (bps) — linear (body)", fontsize=11, fontweight="bold")
+    for a in ax:
+        a.axvline(0, color="grey", lw=0.7); a.set_xlabel("LP markout per trade (bps)"); _gs_bare(a)
+    ax[0].legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def plot_gs_by_size(cache: dict | None = None):
+    """Markout vs trade size (captured notional $): retail mean markout (bps),
+    total markout ($) over all trades, and captured volume ($), per pool."""
+    if cache is None:
+        cache = load_guidestar_backtest()
+    ctr = np.array(cache["by_size"]["centers"])
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4))
+    for nm in cache["meta"]["pool_order"]:
+        bs = cache["by_size"][nm]
+        rm = np.array([np.nan if v is None else v for v in bs["retail_mean_bps"]], dtype=float)
+        ax[0].plot(ctr, rm, "o-", color=GS_COLORS[nm], lw=2, ms=4, label=_gs_short(nm))
+        ax[1].plot(ctr, bs["total_usd"], "o-", color=GS_COLORS[nm], lw=2, ms=4)
+        ax[2].plot(ctr, bs["volume"], "o-", color=GS_COLORS[nm], lw=2, ms=4)
+    ax[0].set_title("Retail: mean LP markout (bps) by trade size", fontsize=10.5, fontweight="bold")
+    ax[0].set_ylabel("mean markout (bps)"); ax[0].legend(fontsize=8)
+    ax[1].set_title("All trades: total LP markout ($) by trade size", fontsize=10.5, fontweight="bold")
+    ax[1].set_ylabel("cumulative markout ($, per sim)")
+    ax[2].set_title("Captured volume ($) by trade size", fontsize=10.5, fontweight="bold")
+    ax[2].set_ylabel("volume ($, per sim)")
+    for a in ax:
+        a.set_xscale("log"); a.axhline(0, color="grey", lw=0.7); a.set_xlabel("captured notional per trade ($)"); _gs_bare(a)
+    fig.tight_layout()
+    return fig
+
+
+def plot_gs_breakeven(cache: dict | None = None):
+    """Final cumulative LP markout ($) vs retail-arrival multiplier; $0 crossings marked."""
+    if cache is None:
+        cache = load_guidestar_backtest()
+    be = cache["breakeven"]; mults = np.array(be["mults"])
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for nm in cache["meta"]["pool_order"]:
+        y = np.array(be["finals"][nm])
+        ax.plot(mults, y, "o-", color=GS_COLORS[nm], lw=2, label=_gs_short(nm))
+        for i in range(len(mults) - 1):
+            if (y[i] < 0 <= y[i + 1]) or (y[i] <= 0 < y[i + 1]):
+                xb = mults[i] + (0 - y[i]) / (y[i + 1] - y[i]) * (mults[i + 1] - mults[i])
+                ax.axvline(xb, color=GS_COLORS[nm], ls=":", lw=1.2)
+                ax.annotate(f"$0 at {xb:.1f}×", (xb, 0), color=GS_COLORS[nm], fontsize=8)
+                break
+    ax.axhline(0, color="grey", lw=0.8)
+    ax.set_xlabel("retail arrival multiplier (× base 0.46/block)"); ax.set_ylabel("final cumulative LP markout ($)")
+    ax.legend(fontsize=8); _gs_bare(ax)
+    ax.set_title(f"Final cumulative markout vs retail arrival ({be['seeds']} seeds)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def plot_gs_volume(cache: dict | None = None):
+    """Retail volume captured ($, per sim) by the candidate pool, per pool and depth."""
+    if cache is None:
+        cache = load_guidestar_backtest()
+    order = cache["meta"]["pool_order"]; depths = cache["meta"]["depths"]
+    xpos = np.arange(len(order)); w = 0.38
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    for i, d in enumerate(depths):
+        vols = [cache["volume"][str(d)][nm] for nm in order]
+        ax.bar(xpos + (i - 0.5) * w, vols, w, label=f"${d/1e6:.1f}M depth",
+               color=[GS_COLORS[n] for n in order], alpha=0.55 + 0.45 * i, edgecolor="black", lw=0.5)
+    ax.set_xticks(xpos); ax.set_xticklabels([_gs_short(n) for n in order], fontsize=9)
+    ax.set_ylabel("retail volume captured ($, per sim)"); ax.legend(fontsize=8)
+    ax.set_title("Retail volume captured by the candidate pool", fontweight="bold", fontsize=11)
+    _gs_bare(ax); ax.grid(alpha=0.25, axis="y")
+    fig.tight_layout()
+    return fig
