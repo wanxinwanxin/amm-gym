@@ -1265,27 +1265,188 @@ def plot_gs_histograms(cache: dict | None = None):
     return fig
 
 
-def plot_gs_by_size(cache: dict | None = None):
-    """Markout vs trade size (captured notional $): retail mean markout (bps),
-    total markout ($) over all trades, and captured volume ($), per pool."""
+def load_guidestar_sensitivity() -> dict:
+    """Cached §9 sensitivity + diagnostic results (guidestar_sensitivity_cache.json,
+    written by scripts/calibration/guidestar_sensitivity.py)."""
+    import json
+    return json.loads((ANALYSIS_DIR / "guidestar_sensitivity_cache.json").read_text())
+
+
+def plot_gs_by_size(cache: dict | None = None, diag: dict | None = None, min_count: int = 30):
+    """Markout vs captured trade size. The left panel reports the per-bin RETAIL
+    markout as the MEDIAN (solid) with the IQR band, not the mean: the size
+    distribution is heavy-tailed, so bins above ~$1k hold few retail trades and the
+    per-trade markout has ~tens-of-bps noise (15s fair drift), which makes the bin
+    MEAN unstable. The mean is overlaid (dotted) for reference; bins with fewer than
+    `min_count` retail trades are drawn faint. Centre/right are sums (count-robust)."""
     if cache is None:
         cache = load_guidestar_backtest()
+    if diag is None:
+        diag = load_guidestar_sensitivity()
+    order = cache["meta"]["pool_order"]
     ctr = np.array(cache["by_size"]["centers"])
-    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4))
-    for nm in cache["meta"]["pool_order"]:
+    dctr = np.array(diag["by_size_diag"]["centers"])
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.6))
+
+    def _arr(d, k):
+        return np.array([np.nan if v is None else v for v in d[k]], dtype=float)
+
+    for nm in order:
+        c = GS_COLORS[nm]
+        d = diag["by_size_diag"][nm]
+        med, mean = _arr(d, "median_bps"), _arr(d, "mean_bps")
+        p25, p75 = _arr(d, "p25_bps"), _arr(d, "p75_bps")
+        cnt = np.array(d["count"], dtype=float)
+        ok = cnt >= min_count
+        med_ok = np.where(ok, med, np.nan)
+        ax[0].plot(dctr, med_ok, "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
+        ax[0].fill_between(dctr, np.where(ok, p25, np.nan), np.where(ok, p75, np.nan), color=c, alpha=0.10)
+        ax[0].plot(dctr, mean, ":", color=c, lw=1, alpha=0.5)            # the unstable mean, for reference
         bs = cache["by_size"][nm]
-        rm = np.array([np.nan if v is None else v for v in bs["retail_mean_bps"]], dtype=float)
-        ax[0].plot(ctr, rm, "o-", color=GS_COLORS[nm], lw=2, ms=4, label=_gs_short(nm))
-        ax[1].plot(ctr, bs["total_usd"], "o-", color=GS_COLORS[nm], lw=2, ms=4)
-        ax[2].plot(ctr, bs["volume"], "o-", color=GS_COLORS[nm], lw=2, ms=4)
-    ax[0].set_title("Retail: mean LP markout (bps) by trade size", fontsize=10.5, fontweight="bold")
-    ax[0].set_ylabel("mean markout (bps)"); ax[0].legend(fontsize=8)
+        ax[1].plot(ctr, bs["total_usd"], "o-", color=c, lw=2, ms=4)
+        ax[2].plot(ctr, bs["volume"], "o-", color=c, lw=2, ms=4)
+    ax[0].set_title(f"Retail LP markout (bps) by trade size\nmedian + IQR (solid), mean (dotted); bins ≥{min_count} trades",
+                    fontsize=10, fontweight="bold")
+    ax[0].set_ylabel("markout (bps)"); ax[0].legend(fontsize=8)
     ax[1].set_title("All trades: total LP markout ($) by trade size", fontsize=10.5, fontweight="bold")
     ax[1].set_ylabel("cumulative markout ($, per sim)")
     ax[2].set_title("Captured volume ($) by trade size", fontsize=10.5, fontweight="bold")
     ax[2].set_ylabel("volume ($, per sim)")
     for a in ax:
         a.set_xscale("log"); a.axhline(0, color="grey", lw=0.7); a.set_xlabel("captured notional per trade ($)"); _gs_bare(a)
+    fig.tight_layout()
+    return fig
+
+
+def plot_gs_by_size_diag(diag: dict | None = None, min_count: int = 30):
+    """Diagnostic for the two unusual by-size features. Top row — the LEFT-panel
+    mean-markout rise: (A) retail markout mean vs median vs leave-one-out mean (drop
+    the single most extreme trade); mean≈median≈drop1 ⇒ not a single outlier. (B)
+    the per-bin retail COUNT (log) with the `min_count` gate ⇒ the rise sits in the
+    sparse tail (52→7→1 trades). Bottom row — the CENTRE-panel total-$ spike: (C)
+    total markout($) by size with the arb-only component overlaid ⇒ the spike is
+    arb/LVR, not retail. (D) the largest-single-trade and top-5 share of the bin's
+    |markout| ⇒ ~5% / ~20% across ~40 arb trades, so the spike is not outlier driven."""
+    if diag is None:
+        diag = load_guidestar_sensitivity()
+    order = diag["meta"]["pool_order"]
+    ctr = np.array(diag["by_size_diag"]["centers"])
+    fig, ax = plt.subplots(2, 2, figsize=(14, 9))
+
+    def _arr(d, k):
+        return np.array([np.nan if v is None else v for v in d[k]], dtype=float)
+
+    for nm in order:
+        c = GS_COLORS[nm]
+        d = diag["by_size_diag"][nm]
+        ax[0, 0].plot(ctr, _arr(d, "mean_bps"), ":", color=c, lw=1.4, alpha=0.8)
+        ax[0, 0].plot(ctr, _arr(d, "median_bps"), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
+        ax[0, 0].plot(ctr, _arr(d, "mean_drop1_bps"), "--", color=c, lw=1.2, alpha=0.8)
+        ax[0, 1].plot(ctr, _arr(d, "count"), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
+        ax[1, 0].plot(ctr, _arr(d, "total_usd"), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
+        ax[1, 0].plot(ctr, _arr(d, "arb_usd"), "x--", color=c, lw=1.2, ms=4, alpha=0.8)
+        ax[1, 1].plot(ctr, 100 * _arr(d, "top1_abs_share"), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
+        ax[1, 1].plot(ctr, 100 * _arr(d, "top5_abs_share"), "s:", color=c, lw=1.2, ms=3, alpha=0.7)
+    ax[0, 0].plot([], [], "k:", lw=1.4, label="mean"); ax[0, 0].plot([], [], "k-", lw=2, label="median")
+    ax[0, 0].plot([], [], "k--", lw=1.2, label="mean drop-1")
+    ax[0, 0].set_title("(A) Retail markout: mean vs median vs leave-one-out", fontsize=10, fontweight="bold")
+    ax[0, 0].set_ylabel("markout (bps)"); ax[0, 0].legend(fontsize=7.5, ncol=2); ax[0, 0].axhline(0, color="grey", lw=0.7)
+    ax[0, 1].axhline(min_count, color="grey", ls=":", lw=1)
+    ax[0, 1].annotate(f"min_count = {min_count}", (ctr[0], min_count * 1.2), fontsize=8, color="grey")
+    ax[0, 1].set_yscale("log"); ax[0, 1].set_title("(B) Retail trades per size bin", fontsize=10, fontweight="bold")
+    ax[0, 1].set_ylabel("count"); ax[0, 1].legend(fontsize=8)
+    ax[1, 0].set_title("(C) Total markout ($): all trades (solid) vs arb-only (×--)", fontsize=10, fontweight="bold")
+    ax[1, 0].set_ylabel("markout ($, per sim)"); ax[1, 0].legend(fontsize=8); ax[1, 0].axhline(0, color="grey", lw=0.7)
+    ax[1, 1].plot([], [], "k-", lw=2, label="largest trade"); ax[1, 1].plot([], [], "ks:", lw=1.2, label="top-5")
+    ax[1, 1].set_title("(D) Share of bin |markout| from biggest trades", fontsize=10, fontweight="bold")
+    ax[1, 1].set_ylabel("% of bin Σ|markout|"); ax[1, 1].legend(fontsize=7.5, ncol=2); ax[1, 1].set_ylim(0, 100)
+    for a in ax.ravel():
+        a.set_xscale("log"); a.set_xlabel("captured notional per trade ($)"); _gs_bare(a)
+    fig.suptitle("§9 — by-size diagnostics: the left-panel rise (top) and the centre-panel spike (bottom)",
+                 fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def plot_gs_arrival_decomp(diag: dict | None = None):
+    """Decompose final LP markout into retail(+) and arb/LVR(−) components, plus
+    retail volume captured, across the retail-arrival multiplier ($1M pool). Explains
+    the breakeven chart: the retail component and captured volume scale up with the
+    arrival rate, while the arb/LVR loss is roughly flat in it."""
+    if diag is None:
+        diag = load_guidestar_sensitivity()
+    ad = diag["arrival_decomp"]
+    order = diag["meta"]["pool_order"]
+    m = np.array(ad["mults"], dtype=float)
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4), sharex=True)
+    for nm in order:
+        c = GS_COLORS[nm]
+        ax[0].plot(m, ad[nm]["retail"], "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
+        ax[1].plot(m, ad[nm]["arb"], "o-", color=c, lw=2, ms=4)
+        ax[2].plot(m, ad[nm]["volume"], "o-", color=c, lw=2, ms=4)
+    ax[0].set_title("Retail markout (+) vs arrival", fontsize=11, fontweight="bold")
+    ax[0].set_ylabel("final retail markout ($)"); ax[0].legend(fontsize=8, loc="upper left")
+    ax[1].set_title("Arb / LVR markout (−) vs arrival", fontsize=11, fontweight="bold")
+    ax[1].set_ylabel("final arb markout ($)")
+    ax[2].set_title("Retail volume captured vs arrival", fontsize=11, fontweight="bold")
+    ax[2].set_ylabel("retail volume ($, per sim)")
+    for a in ax:
+        a.axhline(0, color="grey", lw=0.7); a.set_xlabel("retail arrival multiplier (× base 0.46/block)"); _gs_bare(a)
+    fig.suptitle("§9 — markout decomposition vs retail arrival ($1M pool)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def _gs_crossings(ax, x, y, color):
+    """Mark $0 crossings of a markout curve."""
+    for i in range(len(x) - 1):
+        if (y[i] < 0 <= y[i + 1]) or (y[i] >= 0 > y[i + 1]):
+            xb = x[i] + (0 - y[i]) / (y[i + 1] - y[i]) * (x[i + 1] - x[i])
+            ax.axvline(xb, color=color, ls=":", lw=1.1)
+
+
+def plot_gs_sizedist(diag: dict | None = None):
+    """Sensitivity of the comparison to the retail SIZE distribution ($1M pool).
+    Top row — shift the MEAN (multiply every order size by m: mean & sd move together).
+    Bottom row — shift the SPREAD/std (log-spread around the fixed median:
+    size' = median·(size/median)^s; the median is pinned). Left column: final total
+    LP markout ($) per pool with $0 crossings; right column: retail volume captured."""
+    if diag is None:
+        diag = load_guidestar_sensitivity()
+    sd = diag["sizedist"]
+    order = diag["meta"]["pool_order"]
+    ms, ss = sd["mean_sweep"], sd["std_sweep"]
+    base_mean = diag["sizedist"]["base_mean"]
+    fig, ax = plt.subplots(2, 2, figsize=(14, 9))
+    xm = np.array(ms["means"], dtype=float)            # realized mean order size ($)
+    xs = np.array(ss["log10std"], dtype=float)         # realized log10 spread
+    for nm in order:
+        c = GS_COLORS[nm]
+        tm = np.array(ms[nm]["total"], dtype=float)
+        ts = np.array(ss[nm]["total"], dtype=float)
+        ax[0, 0].plot(xm, tm, "o-", color=c, lw=2, ms=4, label=_gs_short(nm)); _gs_crossings(ax[0, 0], xm, tm, c)
+        ax[0, 1].plot(xm, ms[nm]["volume"], "o-", color=c, lw=2, ms=4)
+        ax[1, 0].plot(xs, ts, "o-", color=c, lw=2, ms=4, label=_gs_short(nm)); _gs_crossings(ax[1, 0], xs, ts, c)
+        ax[1, 1].plot(xs, ss[nm]["volume"], "o-", color=c, lw=2, ms=4)
+    ax[0, 0].set_xscale("log"); ax[0, 1].set_xscale("log")
+    ax[0, 0].axvline(base_mean, color="grey", ls="--", lw=1); ax[0, 1].axvline(base_mean, color="grey", ls="--", lw=1)
+    ax[1, 0].axvline(diag["sizedist"]["base_log10std"], color="grey", ls="--", lw=1)
+    ax[1, 1].axvline(diag["sizedist"]["base_log10std"], color="grey", ls="--", lw=1)
+    ax[0, 0].set_title("MEAN shift — final total LP markout ($)", fontsize=10.5, fontweight="bold")
+    ax[0, 0].set_ylabel("final markout ($)"); ax[0, 0].legend(fontsize=8)
+    ax[0, 1].set_title("MEAN shift — retail volume captured ($)", fontsize=10.5, fontweight="bold")
+    ax[0, 1].set_ylabel("retail volume ($, per sim)")
+    for a in (ax[0, 0], ax[0, 1]):
+        a.set_xlabel("mean order size ($, log)  —  dashed = calibrated")
+    ax[1, 0].set_title("SPREAD shift — final total LP markout ($)", fontsize=10.5, fontweight="bold")
+    ax[1, 0].set_ylabel("final markout ($)"); ax[1, 0].legend(fontsize=8)
+    ax[1, 1].set_title("SPREAD shift — retail volume captured ($)", fontsize=10.5, fontweight="bold")
+    ax[1, 1].set_ylabel("retail volume ($, per sim)")
+    for a in (ax[1, 0], ax[1, 1]):
+        a.set_xlabel("log10 spread of order size  —  dashed = calibrated")
+    for a in ax.ravel():
+        a.axhline(0, color="grey", lw=0.7); _gs_bare(a)
+    fig.suptitle("§9 — sensitivity to the retail size distribution ($1M pool, 24 seeds)", fontweight="bold", fontsize=11)
     fig.tight_layout()
     return fig
 
