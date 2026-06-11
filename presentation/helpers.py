@@ -702,6 +702,79 @@ def _venue_labels(top_pool, top_project, spread) -> np.ndarray:
     return out
 
 
+def load_mm_fee_txs() -> set:
+    """Tx hashes that paid the MetaMask 87.5bps fee (the MetaMask-router cohort, 30d)."""
+    s = pd.read_csv(ANALYSIS_DIR / "mm_fee_txs_30d.csv")["tx_hash"].astype(str).str.lower()
+    return set(s)
+
+
+def _router_labels(tx_hash) -> np.ndarray:
+    """Per-order router: MetaMask if the tx paid the MM fee, else Uniswap first-party FE.
+    (The §4 strict cohort is uni_fe ∪ mm_fee, disjoint, so not-MM ⇒ Uniswap.)"""
+    mm = load_mm_fee_txs()
+    return np.where(np.asarray([h.lower() for h in tx_hash]) == np.asarray([h.lower() for h in tx_hash]),
+                    np.where([h.lower() in mm for h in tx_hash], "MetaMask", "Uniswap"), "Uniswap")
+
+
+# router-coloured categories -> (color, z, point size, alpha)
+_ROUTER_STYLE = {
+    "Uniswap FE": ("#2980b9", 2, 4, 0.18),
+    "MetaMask (other venues)": ("#e67e22", 5, 10, 0.55),
+    "MetaMask → Curve/Balancer (30bp)": ("#c0392b", 7, 22, 0.95),
+}
+_ROUTER_ORDER = list(_ROUTER_STYLE.keys())
+
+
+def plot_impact_curve_by_router(ax: plt.Axes | None = None, plan_key: str = "plan_b") -> plt.Axes:
+    """The all-non-5bp-venue impact cloud coloured by ORDER ROUTER (Uniswap first-party
+    FE vs MetaMask), with the MetaMask→Curve/Balancer subset (the 30bp-venue routing
+    interaction) called out. Each dot is one order (tx); router is a per-order property.
+    Binned medians are drawn per router; same V2 fit as Chart 3a."""
+    sample = load_impact_curve_sample()
+    fit = load_impact_curve_fit()
+    phi = fit[plan_key]["phi"]; depth = fit[plan_key]["depth_usdc"]
+    s = sample[(sample["n_distinct_sides"] == 1) & (sample["size_usd"] > 1.0)
+               & np.isfinite(sample["observed_spread_fair_lag_bps"])].copy()
+    router = _router_labels(s["tx_hash"])
+    proj = s["top_project"].astype(str).str.lower().to_numpy()
+    cat = np.where(router == "Uniswap", "Uniswap FE",
+                   np.where(np.isin(proj, ["curve", "balancer"]),
+                            "MetaMask → Curve/Balancer (30bp)", "MetaMask (other venues)"))
+    s["cat"] = cat
+    size = s["size_usd"].to_numpy(); spread = s["observed_spread_fair_lag_bps"].to_numpy()
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(12, 6))
+    for c in _ROUTER_ORDER:
+        m = (s["cat"] == c).to_numpy()
+        if not m.any():
+            continue
+        color, z, sz, al = _ROUTER_STYLE[c]
+        ax.scatter(size[m], spread[m], s=sz, color=color, alpha=al, edgecolor="none", zorder=z,
+                   label=f"{c} (n={int(m.sum()):,})")
+    # USD-weighted log-binned medians per router
+    edges = np.logspace(0, np.log10(max(size.max(), 10)), 26)
+    for rt, col in [("Uniswap", "#1b4f72"), ("MetaMask", "#a04000")]:
+        mr = router == rt
+        cen, med = [], []
+        for lo, hi in zip(edges[:-1], edges[1:]):
+            mm2 = mr & (size >= lo) & (size < hi)
+            if mm2.sum() >= 8:
+                cen.append(np.sqrt(lo * hi)); med.append(np.median(spread[mm2]))
+        ax.plot(cen, med, "o-", color=col, lw=2, ms=3, zorder=8, label=f"{rt} binned median")
+    sizes_fit = np.logspace(2, np.log10(size.max()), 200)
+    ax.plot(sizes_fit, v2_spread_bps(sizes_fit, phi, depth), "-", color="#2c3e50", lw=2, zorder=8,
+            label=f"V2 fit: φ={phi*1e4:.2f} bps, D=${depth/1e6:.1f}M")
+    ax.set_xscale("log"); ax.set_ylim(-10, 60)
+    ax.set_xlabel("Order size (USD)"); ax.set_ylabel("Spread vs lagged fair (bps)")
+    ax.set_title("Chart 3a (by router) — Uniswap FE vs MetaMask; MetaMask→Curve/Balancer separated",
+                 fontweight="bold", fontsize=11)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), fontsize=8, framealpha=0.95, markerscale=1.6, borderaxespad=0.0)
+    ax.figure.subplots_adjust(right=0.7)
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False); ax.grid(alpha=0.25)
+    return ax
+
+
 def plot_impact_curve_by_venue(ax: plt.Axes | None = None,
                                plan_key: str = "plan_b") -> plt.Axes:
     """The all-non-5bp-venue impact cloud (Chart 3a) coloured by venue + version,
