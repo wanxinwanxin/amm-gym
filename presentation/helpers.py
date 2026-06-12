@@ -1303,8 +1303,13 @@ def plot_gs_by_size(cache: dict | None = None, diag: dict | None = None, min_cou
         ax[0].fill_between(dctr, np.where(ok, p25, np.nan), np.where(ok, p75, np.nan), color=c, alpha=0.10)
         ax[0].plot(dctr, mean, ":", color=c, lw=1, alpha=0.5)            # the unstable mean, for reference
         bs = cache["by_size"][nm]
-        ax[1].plot(ctr, bs["total_usd"], "o-", color=c, lw=2, ms=4)
-        ax[2].plot(ctr, bs["volume"], "o-", color=c, lw=2, ms=4)
+        # mask empty bins: above ~$31k no trade is captured at this depth, so plotting 0
+        # there reads as "profitable" when it is really "no data". End the line instead.
+        nonempty = np.array(d["all_count"], dtype=float) > 0
+        tot = np.where(nonempty, bs["total_usd"], np.nan)
+        vol = np.where(nonempty, bs["volume"], np.nan)
+        ax[1].plot(ctr, tot, "o-", color=c, lw=2, ms=4)
+        ax[2].plot(ctr, vol, "o-", color=c, lw=2, ms=4)
     ax[0].set_title(f"Retail LP markout (bps) by trade size\nmedian + IQR (solid), mean (dotted); bins ≥{min_count} trades",
                     fontsize=10, fontweight="bold")
     ax[0].set_ylabel("markout (bps)"); ax[0].legend(fontsize=8)
@@ -1343,8 +1348,9 @@ def plot_gs_by_size_diag(diag: dict | None = None, min_count: int = 30):
         ax[0, 0].plot(ctr, _arr(d, "median_bps"), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
         ax[0, 0].plot(ctr, _arr(d, "mean_drop1_bps"), "--", color=c, lw=1.2, alpha=0.8)
         ax[0, 1].plot(ctr, _arr(d, "count"), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
-        ax[1, 0].plot(ctr, _arr(d, "total_usd"), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
-        ax[1, 0].plot(ctr, _arr(d, "arb_usd"), "x--", color=c, lw=1.2, ms=4, alpha=0.8)
+        nonempty = np.array(d["all_count"], dtype=float) > 0   # mask empty bins (no trades captured at this depth)
+        ax[1, 0].plot(ctr, np.where(nonempty, _arr(d, "total_usd"), np.nan), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
+        ax[1, 0].plot(ctr, np.where(nonempty, _arr(d, "arb_usd"), np.nan), "x--", color=c, lw=1.2, ms=4, alpha=0.8)
         ax[1, 1].plot(ctr, 100 * _arr(d, "top1_abs_share"), "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
         ax[1, 1].plot(ctr, 100 * _arr(d, "top5_abs_share"), "s:", color=c, lw=1.2, ms=3, alpha=0.7)
     ax[0, 0].plot([], [], "k:", lw=1.4, label="mean"); ax[0, 0].plot([], [], "k-", lw=2, label="median")
@@ -1489,5 +1495,164 @@ def plot_gs_volume(cache: dict | None = None):
     ax.set_ylabel("retail volume captured ($, per sim)"); ax.legend(fontsize=8)
     ax.set_title("Retail volume captured by the candidate pool", fontweight="bold", fontsize=11)
     _gs_bare(ax); ax.grid(alpha=0.25, axis="y")
+    fig.tight_layout()
+    return fig
+
+
+# ============================ §11 — regime map + unifying strategy ============================
+REGIME_COLORS = {"Guidestar": "#8e44ad", "flat 3.5bp": "#e67e22", "flat 5bp": "#2980b9",
+                 "FlowAware": "#27ae60", "SizeAware": "#c0392b", "Unified": "#16a085"}
+_STATIC3 = ["Guidestar", "flat 3.5bp", "flat 5bp"]
+
+
+def load_guidestar_regime() -> dict:
+    """Cached joint arrival×size regime sweep (guidestar_regime_cache.json,
+    written by scripts/calibration/guidestar_regime.py)."""
+    import json
+    return json.loads((ANALYSIS_DIR / "guidestar_regime_cache.json").read_text())
+
+
+def _regime_axes(ax, reg):
+    """Label a heatmap's axes with the arrival / mean multipliers."""
+    am, mm = reg["meta"]["arr_mults"], reg["meta"]["mean_mults"]
+    ax.set_xticks(range(len(am))); ax.set_xticklabels([f"{m:g}×" for m in am], fontsize=8)
+    ax.set_yticks(range(len(mm))); ax.set_yticklabels([f"{m:g}×" for m in mm], fontsize=8)
+    ax.set_xlabel("retail arrival multiplier"); ax.set_ylabel("order-size mean multiplier")
+
+
+def plot_gs_intuition_schematic():
+    """Conceptual visualization of the §10 sensitivity intuition: the two flow
+    channels and which fee policy wins in which (arrival × size) regime."""
+    import matplotlib.patches as mpatches
+    fig, ax = plt.subplots(figsize=(9.5, 7))
+    ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.axis("off")
+    # diagonal split: defend (upper-left, big & sparse) vs cheap (lower-right, small & frequent)
+    ax.fill([0, 10, 0], [0, 10, 10], color="#8e44ad", alpha=0.10)      # upper-left triangle: defend
+    ax.fill([0, 10, 10], [0, 0, 10], color="#e67e22", alpha=0.10)      # lower-right triangle: cheap
+    ax.plot([0, 10], [0, 10], color="grey", ls="--", lw=1.3)
+    ax.annotate("", xy=(9.4, 0.4), xytext=(0.6, 0.4), arrowprops=dict(arrowstyle="->", color="black", lw=1.4))
+    ax.text(5, 0.05, "retail arrival rate  →", ha="center", fontsize=11, fontweight="bold")
+    ax.annotate("", xy=(0.4, 9.4), xytext=(0.4, 0.6), arrowprops=dict(arrowstyle="->", color="black", lw=1.4))
+    ax.text(0.05, 5, "order size  →", ha="center", va="center", rotation=90, fontsize=11, fontweight="bold")
+    ax.text(2.6, 8.0, "DEFEND aggressively\n(Guidestar)", ha="center", fontsize=12, fontweight="bold", color="#8e44ad")
+    ax.text(2.6, 7.0, "sparse + large ⇒ toxic flow dominates;\nhigher floor + directional skew\nminimise LVR", ha="center", fontsize=9, color="#5b2c6f")
+    ax.text(7.4, 2.0, "go CHEAP\n(low / fast-decaying fee)", ha="center", fontsize=12, fontweight="bold", color="#b9620a")
+    ax.text(7.4, 1.05, "frequent + small ⇒ benign flow dominates;\nlow fee wins the largest routed share", ha="center", fontsize=9, color="#7e4708")
+    ax.text(5.0, 5.2, "middle ground: high volatility + heavy retail\n→ defend on the vol spike, keep the floor moderate",
+            ha="center", fontsize=9.5, fontstyle="italic", color="dimgray",
+            bbox=dict(boxstyle="round", fc="white", ec="grey", alpha=0.8))
+    # two flow-channel annotations
+    ax.text(5.0, 9.6, "toxic ARB / LVR (−): scales with size × volatility · mitigated by a directional fee",
+            ha="center", fontsize=9, color="#8e44ad",
+            bbox=dict(boxstyle="round", fc="#f5eef8", ec="#8e44ad"))
+    ax.text(5.0, 0.7 + 2.6, "", ha="center")
+    ax.text(8.7, 4.6, "benign RETAIL (+spread):\nscales with arrival ×\ncaptured share (↑ at low fee)",
+            ha="center", fontsize=9, color="#b9620a",
+            bbox=dict(boxstyle="round", fc="#fdf2e9", ec="#e67e22"))
+    ax.set_title("§11 — sensitivity intuition: two flow channels, two regimes\n"
+                 "(FlowAware moves along the dashed diagonal as it senses the flow)",
+                 fontsize=11, fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
+def plot_gs_regime_map(reg: dict | None = None):
+    """Data-grounded regime map over the arrival × size grid ($1M pool). Left — which
+    static pool has the best final markout in each cell (the §10 intuition made
+    spatial). Right — Guidestar minus the best flat baseline ($), with the $0
+    boundary; positive = Guidestar's defense wins, negative = a flat low fee wins."""
+    from matplotlib.colors import ListedColormap, TwoSlopeNorm
+    if reg is None:
+        reg = load_guidestar_regime()
+    g = reg["grids"]
+    tot = {nm: np.array(g[nm]["total"]) for nm in reg["meta"]["pools"]}
+    fig, ax = plt.subplots(1, 2, figsize=(14, 5.2))
+    # (A) winner among the 3 static pools
+    stack = np.dstack([tot[nm] for nm in _STATIC3])          # (mean, arr, 3)
+    win = np.argmax(stack, axis=2)
+    cmap = ListedColormap([REGIME_COLORS[nm] for nm in _STATIC3])
+    ax[0].imshow(win, origin="lower", aspect="auto", cmap=cmap, vmin=0, vmax=2, alpha=0.85)
+    for i in range(win.shape[0]):
+        for j in range(win.shape[1]):
+            ax[0].text(j, i, _STATIC3[win[i, j]].replace("flat ", "").replace("Guidestar", "GS")[:4],
+                       ha="center", va="center", fontsize=7.5, color="white", fontweight="bold")
+    _regime_axes(ax[0], reg); ax[0].set_title("(A) Best static pool by regime", fontsize=11, fontweight="bold")
+    # (B) Guidestar - best flat
+    bestflat = np.maximum(tot["flat 3.5bp"], tot["flat 5bp"])
+    margin = tot["Guidestar"] - bestflat
+    lim = float(np.abs(margin).max())
+    norm = TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim)
+    im = ax[1].imshow(margin, origin="lower", aspect="auto", cmap="RdBu_r", norm=norm)
+    cs = ax[1].contour(margin, levels=[0], colors="black", linewidths=1.5)
+    for i in range(margin.shape[0]):
+        for j in range(margin.shape[1]):
+            ax[1].text(j, i, f"{margin[i,j]:.0f}", ha="center", va="center", fontsize=7,
+                       color="black" if abs(margin[i, j]) < lim * 0.6 else "white")
+    _regime_axes(ax[1], reg)
+    ax[1].set_title("(B) Guidestar − best flat ($); >0 ⇒ Guidestar wins", fontsize=11, fontweight="bold")
+    fig.colorbar(im, ax=ax[1], fraction=0.046, pad=0.04, label="markout difference ($)")
+    fig.suptitle("§11 — arrival × size regime map ($1M pool, 12 seeds)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def _adaptive_margin_panel(ax, reg, name, best_static, tot):
+    from matplotlib.colors import TwoSlopeNorm
+    margin = tot[name] - best_static
+    lim = max(float(np.abs(margin).max()), 1.0)
+    im = ax.imshow(margin, origin="lower", aspect="auto", cmap="RdBu",
+                   norm=TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim))
+    for i in range(margin.shape[0]):
+        for j in range(margin.shape[1]):
+            ax.text(j, i, f"{margin[i,j]:.0f}", ha="center", va="center", fontsize=6.5,
+                    color="black" if abs(margin[i, j]) < lim * 0.6 else "white")
+    _regime_axes(ax, reg)
+    return im
+
+
+def plot_gs_adaptive(reg: dict | None = None):
+    """Do the adaptive policies track the upper envelope of the two static regimes?
+    Top row — each adaptive strategy minus the best of the three static pools ($) per
+    cell (blue/≥0 ⇒ matches or beats the best static there; red/<0 ⇒ lags). Bottom row
+    — arrival and size slices (statics + Unified vs the best-static envelope), and a
+    tally of how many of the 30 cells each adaptive policy ties-or-beats. FlowAware
+    blends on a block-level flow EWMA; SizeAware conditions on the incoming order size;
+    Unified does both (size-conditioned retail + flow-gated arb defense)."""
+    if reg is None:
+        reg = load_guidestar_regime()
+    g = reg["grids"]; am = reg["meta"]["arr_mults"]; mm = reg["meta"]["mean_mults"]
+    pools = reg["meta"]["pools"]
+    tot = {nm: np.array(g[nm]["total"]) for nm in pools}
+    best_static = np.maximum.reduce([tot[nm] for nm in _STATIC3])
+    adaptive = [nm for nm in ("FlowAware", "SizeAware", "Unified") if nm in pools]
+    fig, ax = plt.subplots(2, 3, figsize=(17.5, 9.5))
+    for k, nm in enumerate(adaptive):
+        im = _adaptive_margin_panel(ax[0, k], reg, nm, best_static, tot)
+        ax[0, k].set_title(f"({chr(65+k)}) {nm} − best static ($)", fontsize=10.5, fontweight="bold")
+        fig.colorbar(im, ax=ax[0, k], fraction=0.046, pad=0.04)
+    slice_pools = [p for p in (_STATIC3 + ["Unified"]) if p in pools]
+    i1, j1 = mm.index(1.0), am.index(1.0)
+    for nm in slice_pools:
+        z = 3 if nm == "Unified" else 2
+        ax[1, 0].plot(am, tot[nm][i1, :], "o-", color=REGIME_COLORS[nm], lw=2, ms=4, label=nm, zorder=z)
+        ax[1, 1].plot(mm, tot[nm][:, j1], "o-", color=REGIME_COLORS[nm], lw=2, ms=4, label=nm, zorder=z)
+    ax[1, 0].plot(am, best_static[i1, :], "k--", lw=1.1, alpha=0.7, label="best static")
+    ax[1, 1].plot(mm, best_static[:, j1], "k--", lw=1.1, alpha=0.7, label="best static")
+    ax[1, 0].set_xlabel("retail arrival multiplier (mean ×1)"); ax[1, 0].set_ylabel("final total markout ($)")
+    ax[1, 0].set_title("(D) arrival slice", fontsize=10.5, fontweight="bold"); ax[1, 0].legend(fontsize=7.5)
+    ax[1, 1].set_xlabel("order-size mean multiplier (arrival ×1)"); ax[1, 1].set_ylabel("final total markout ($)")
+    ax[1, 1].set_title("(E) size slice", fontsize=10.5, fontweight="bold"); ax[1, 1].legend(fontsize=7.5)
+    for a in (ax[1, 0], ax[1, 1]):
+        a.axhline(0, color="grey", lw=0.7); _gs_bare(a)
+    # (F) tally: cells (of 30) where each adaptive ties/beats the best static (within $1)
+    ncells = best_static.size
+    counts = [int(np.sum(tot[nm] - best_static >= -1.0)) for nm in adaptive]
+    ax[1, 2].bar(range(len(adaptive)), counts, color=[REGIME_COLORS[nm] for nm in adaptive], edgecolor="black", lw=0.5)
+    ax[1, 2].set_xticks(range(len(adaptive))); ax[1, 2].set_xticklabels(adaptive, fontsize=8)
+    ax[1, 2].set_ylim(0, ncells); ax[1, 2].set_ylabel(f"cells ties/beats best static (of {ncells})")
+    ax[1, 2].set_title("(F) envelope coverage", fontsize=10.5, fontweight="bold"); _gs_bare(ax[1, 2])
+    for k, c in enumerate(counts):
+        ax[1, 2].text(k, c + 0.4, str(c), ha="center", fontsize=9, fontweight="bold")
+    fig.suptitle("§11 — adaptive policies vs the static pools ($1M pool, 12 seeds)", fontweight="bold", fontsize=11)
     fig.tight_layout()
     return fig
