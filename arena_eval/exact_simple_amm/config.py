@@ -60,6 +60,15 @@ class ExactSimpleAMMConfig:
     # arrives, and no arbitrage ever hits it. Challenge mode leaves this False
     # (there the normalizer is a real competing baseline pool that must be arbed).
     normalizer_tracks_fair: bool = False
+    # Arbitrageur passes against the submission pool per arb event. >1 lets the arb
+    # re-trade as a per-swap dynamic fee decays (e.g. the Nezlobin surcharge). Default
+    # 1 reproduces the single-pass behavior of every existing config exactly.
+    arb_max_passes: int = 1
+    # When True, run the submission arbitrageur a SECOND time at the bottom of the
+    # block (after retail), realigning to fair. Needed by intra-block dynamic-fee
+    # strategies whose surcharge is paid by the same-block backrun. Default False
+    # leaves existing configs unchanged (arb only at the top of the block).
+    bottom_of_block_arb: bool = False
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.submission_liquidity_fraction) or self.submission_liquidity_fraction <= 0.0:

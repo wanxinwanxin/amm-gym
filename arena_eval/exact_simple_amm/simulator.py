@@ -706,46 +706,53 @@ class ExactSimpleAMMSimulator:
                 "normalizer_ask_fee": self.normalizer.ask_fee,
             }
 
-        # Pre-swap hook for the arb (the block's first swap): the strategy prices
-        # it from current state before the arbitrageur sizes it against the fee.
-        self.submission.before_swap(
-            is_buy=self.submission.spot_price < fair_price, size=None, block=timestamp
-        )
-        submission_arb = self.arbitrageur.execute_arb(self.submission, fair_price, timestamp)
-        if submission_arb is not None:
-            pre_metrics = metric_snapshot()
-            self.arb_volume_submission_y += submission_arb.amount_y
-            self.arb_loss_submission += submission_arb.profit
-            self.edge_submission -= submission_arb.profit
-            self.last_submission_trade = submission_arb.trade_info
-            self.submission_trade_count += 1
-            post_metrics = metric_snapshot()
-            trade_events.append(
-                {
-                    "venue": submission_arb.amm_name,
-                    "source": submission_arb.source,
-                    "trader_side": "buy_x" if submission_arb.side == "sell" else "sell_x",
-                    "amount_x": submission_arb.amount_x,
-                    "amount_y": submission_arb.amount_y,
-                    "pre_spot_price": submission_arb.pre_spot_price,
-                    "post_spot_price": submission_arb.post_spot_price,
-                    "pre_state": {
-                        **global_quote_state(),
-                        f"{submission_arb.amm_name}_mid": submission_arb.pre_state["mid"],
-                        f"{submission_arb.amm_name}_bid_fee": submission_arb.pre_state["bid_fee"],
-                        f"{submission_arb.amm_name}_ask_fee": submission_arb.pre_state["ask_fee"],
-                    },
-                    "post_state": {
-                        **global_quote_state(),
-                        f"{submission_arb.amm_name}_mid": submission_arb.post_state["mid"],
-                        f"{submission_arb.amm_name}_bid_fee": submission_arb.post_state["bid_fee"],
-                        f"{submission_arb.amm_name}_ask_fee": submission_arb.post_state["ask_fee"],
-                    },
-                    "pre_metrics": pre_metrics,
-                    "post_metrics": post_metrics,
-                    "trade_info": submission_arb.trade_info,
-                }
-            )
+        # Arb the submission pool toward fair. Wrapped in a helper so it can run both
+        # at the top of the block and (optionally) at the bottom, and iterate: with a
+        # per-swap dynamic fee the surcharge decays as the reversing arb trades, so a
+        # later pass can still be profitable. before_swap reprices each pass.
+        def run_submission_arb(max_passes: int) -> None:
+            for _ in range(max(1, int(max_passes))):
+                self.submission.before_swap(
+                    is_buy=self.submission.spot_price < fair_price, size=None, block=timestamp
+                )
+                submission_arb = self.arbitrageur.execute_arb(self.submission, fair_price, timestamp)
+                if submission_arb is None:
+                    break
+                pre_metrics = metric_snapshot()
+                self.arb_volume_submission_y += submission_arb.amount_y
+                self.arb_loss_submission += submission_arb.profit
+                self.edge_submission -= submission_arb.profit
+                self.last_submission_trade = submission_arb.trade_info
+                self.submission_trade_count += 1
+                post_metrics = metric_snapshot()
+                trade_events.append(
+                    {
+                        "venue": submission_arb.amm_name,
+                        "source": submission_arb.source,
+                        "trader_side": "buy_x" if submission_arb.side == "sell" else "sell_x",
+                        "amount_x": submission_arb.amount_x,
+                        "amount_y": submission_arb.amount_y,
+                        "pre_spot_price": submission_arb.pre_spot_price,
+                        "post_spot_price": submission_arb.post_spot_price,
+                        "pre_state": {
+                            **global_quote_state(),
+                            f"{submission_arb.amm_name}_mid": submission_arb.pre_state["mid"],
+                            f"{submission_arb.amm_name}_bid_fee": submission_arb.pre_state["bid_fee"],
+                            f"{submission_arb.amm_name}_ask_fee": submission_arb.pre_state["ask_fee"],
+                        },
+                        "post_state": {
+                            **global_quote_state(),
+                            f"{submission_arb.amm_name}_mid": submission_arb.post_state["mid"],
+                            f"{submission_arb.amm_name}_bid_fee": submission_arb.post_state["bid_fee"],
+                            f"{submission_arb.amm_name}_ask_fee": submission_arb.post_state["ask_fee"],
+                        },
+                        "pre_metrics": pre_metrics,
+                        "post_metrics": post_metrics,
+                        "trade_info": submission_arb.trade_info,
+                    }
+                )
+
+        run_submission_arb(self.config.arb_max_passes)
 
         if self.config.normalizer_tracks_fair:
             # Normalizer = efficient "rest of market": snap its mid to fair at
@@ -830,6 +837,12 @@ class ExactSimpleAMMSimulator:
                     "trade_info": trade.trade_info,
                 }
             )
+
+        # Bottom-of-block arb (optional): a same-block backrun that realigns the
+        # submission pool to fair after retail. Under an intra-block directional fee
+        # this is the leg that pays the surcharge, handing the LP its share.
+        if self.config.bottom_of_block_arb:
+            run_submission_arb(self.config.arb_max_passes)
 
         self._record_fee_snapshot()
         self.current_step += 1
