@@ -1791,3 +1791,149 @@ def plot_nz_by_size(cache: dict | None = None, min_count: int = 30):
     fig.suptitle(f"§12 — markout by captured trade size at ${d_m:g}M depth", fontweight="bold", fontsize=11)
     fig.tight_layout()
     return fig
+
+
+def plot_nezlobin_dynamics(scenario: dict | None = None):
+    """Visualize the Nezlobin / Volatile-Hook components by driving the strategy
+    through a scripted multi-block path (1 step = 1 block). Four panels:
+      (A) the scripted price path — block-open P_TOB (steps) + intra-block excursions;
+      (B) the quoted bid/ask fee over swaps — resting level + intra-block surcharge spikes;
+      (C) the resting f_a/f_b per block — the EMA-of-PI skew and the big-PI spread-widening
+          exception (sum > TS at the big-move block);
+      (D) the intra-block surcharge transfer function — for resting 4.5/4.5, bid & ask
+          fee vs the intra-block move: the reverting side takes ½·move, the continuation
+          side max(α·move, d)."""
+    from arena_eval.core.types import IncomingSwap
+    from arena_eval.exact_simple_amm.nezlobin_dynamic_fee import NezlobinDynamicFeeStrategy
+    sc = scenario or {}
+    blocks_open = sc.get("blocks_open", [100, 100.05, 100.10, 100.10, 100.10, 103.0, 103.0, 102.95, 102.95, 102.95])
+    intra = sc.get("intra", [0.0, 0.004, 0.007, 0.003])     # intra-block fractional excursions after the open
+
+    def quote(s, blk, spot):
+        return s.before_swap(IncomingSwap(is_buy=True, size=100.0, reserve_x=1e4, reserve_y=1e4 * spot, block=blk))
+
+    s = NezlobinDynamicFeeStrategy()
+    s.after_initialize(1e4, 1e6)
+    xi, spath, bidp, askp = [], [], [], []
+    rest_blk, rest_bid, rest_ask = [], [], []
+    k = 0
+    for b, p_tob in enumerate(blocks_open):
+        for j, dz in enumerate(intra):
+            spot = p_tob * (1.0 + dz)
+            bid, ask = quote(s, b, spot)
+            xi.append(k); spath.append(spot); bidp.append(bid * 1e4); askp.append(ask * 1e4); k += 1
+            if j == 0:                                       # first swap of block -> resting
+                rest_blk.append(b); rest_bid.append(bid * 1e4); rest_ask.append(ask * 1e4)
+
+    fig, ax = plt.subplots(2, 2, figsize=(14, 8.5))
+    ax[0, 0].plot(xi, spath, color="#34495e", lw=1.5)
+    for b in range(len(blocks_open)):
+        ax[0, 0].axvline(b * len(intra) - 0.5, color="grey", ls=":", lw=0.6)
+    ax[0, 0].set_title("(A) scripted price path (1 block = %d swaps)" % len(intra), fontsize=10.5, fontweight="bold")
+    ax[0, 0].set_ylabel("AMM mid"); ax[0, 0].set_xlabel("swap index")
+    ax[0, 1].plot(xi, bidp, color="#c0392b", lw=1.6, label="bid fee (sell side)")
+    ax[0, 1].plot(xi, askp, color="#2980b9", lw=1.6, label="ask fee (buy side)")
+    ax[0, 1].set_title("(B) quoted fee over swaps — resting + intra-block surcharge", fontsize=10.5, fontweight="bold")
+    ax[0, 1].set_ylabel("fee (bps)"); ax[0, 1].set_xlabel("swap index"); ax[0, 1].legend(fontsize=8)
+    ax[1, 0].plot(rest_blk, rest_bid, "o-", color="#c0392b", lw=1.8, ms=4, label="resting bid f_b")
+    ax[1, 0].plot(rest_blk, rest_ask, "o-", color="#2980b9", lw=1.8, ms=4, label="resting ask f_a")
+    ax[1, 0].plot(rest_blk, np.array(rest_bid) + np.array(rest_ask), "k--", lw=1.0, alpha=0.7, label="sum")
+    ax[1, 0].axhline(9.0, color="grey", ls=":", lw=1); ax[1, 0].annotate("TS = 9bps", (0, 9.4), fontsize=8, color="grey")
+    ax[1, 0].set_title("(C) resting fees per block — EMA skew + big-PI exception", fontsize=10.5, fontweight="bold")
+    ax[1, 0].set_ylabel("fee (bps)"); ax[1, 0].set_xlabel("block"); ax[1, 0].legend(fontsize=8)
+    # (D) transfer function: resting 4.5/4.5, sweep the intra-block move
+    s2 = NezlobinDynamicFeeStrategy(); s2.after_initialize(1e4, 1e6)
+    quote(s2, 0, 100.0)                                       # open block 0 at p0 = 100
+    moves = np.linspace(-0.01, 0.01, 81); bd, ak = [], []
+    for m in moves:
+        b, a = quote(s2, 0, 100.0 * (1.0 + m))
+        bd.append(b * 1e4); ak.append(a * 1e4)
+    ax[1, 1].plot(moves * 1e4, bd, color="#c0392b", lw=1.8, label="bid fee (sell)")
+    ax[1, 1].plot(moves * 1e4, ak, color="#2980b9", lw=1.8, label="ask fee (buy)")
+    ax[1, 1].axhline(4.5, color="grey", ls=":", lw=1); ax[1, 1].axvline(0, color="grey", lw=0.6)
+    ax[1, 1].set_title("(D) intra-block surcharge vs move — ½·move (revert) vs max(α·move, d)", fontsize=10, fontweight="bold")
+    ax[1, 1].set_ylabel("fee (bps)"); ax[1, 1].set_xlabel("intra-block move P_BS−P_TOB (bps)"); ax[1, 1].legend(fontsize=8)
+    for a in ax.ravel():
+        _gs_bare(a)
+    fig.suptitle("§12 — Nezlobin / Volatile-Hook fee mechanics (driven on a scripted path)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def load_nezlobin_intuition() -> dict:
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_intuition_cache.json").read_text())
+
+
+def load_nezlobin_sensitivity() -> dict:
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_sensitivity_cache.json").read_text())
+
+
+def plot_nz_intuition(cache: dict | None = None):
+    """Why Guidestar out-marks Nezlobin at base arrival ($1M, §8 normalizer). (A) markout
+    split into retail(+)/arb(−)/total — Guidestar's edge is entirely a smaller arb/LVR
+    loss. (B) arb activity: trades per sim vs effective cost paid (bps) — Guidestar is
+    arbed far less often and each arb pays far more (it deters + taxes the arb), while
+    Nezlobin ≈ the flats (its surcharge hits the reverting side, but the LVR-extracting
+    top-of-block arb is the resting-fee first swap, untaxed). (C) the trade-off: retail
+    volume captured — Guidestar captures the least, yet wins on net at base."""
+    if cache is None:
+        cache = load_nezlobin_intuition()
+    order = cache["meta"]["pool_order"]
+    fig, ax = plt.subplots(1, 3, figsize=(16, 4.8))
+    # (A) markout decomposition
+    xp = np.arange(len(order)); w = 0.27
+    ret = [cache[nm]["retail_total"] for nm in order]
+    arb = [cache[nm]["arb_total"] for nm in order]
+    tot = [r + a for r, a in zip(ret, arb)]
+    ax[0].bar(xp - w, ret, w, label="retail (+)", color="#27ae60")
+    ax[0].bar(xp, arb, w, label="arb / LVR (−)", color="#c0392b")
+    ax[0].bar(xp + w, tot, w, label="total", color="#34495e")
+    ax[0].axhline(0, color="grey", lw=0.7); ax[0].set_xticks(xp); ax[0].set_xticklabels([_gs_short(n) for n in order], fontsize=8, rotation=20, ha="right")
+    ax[0].set_ylabel("final markout ($)"); ax[0].legend(fontsize=8)
+    ax[0].set_title("(A) markout decomposition", fontsize=10.5, fontweight="bold")
+    # (B) arb activity: count vs cost
+    for nm in order:
+        ax[1].scatter(cache[nm]["arb_count"], cache[nm]["arb_cost_bps"], s=120, color=NZ_COLORS[nm], edgecolor="black", zorder=3)
+        ax[1].annotate(_gs_short(nm), (cache[nm]["arb_count"], cache[nm]["arb_cost_bps"]),
+                       fontsize=8, xytext=(5, 4), textcoords="offset points")
+    ax[1].set_xlabel("arb trades per sim"); ax[1].set_ylabel("arb effective cost (bps)")
+    ax[1].set_title("(B) Guidestar deters + taxes the arb", fontsize=10.5, fontweight="bold"); _gs_bare(ax[1])
+    # (C) retail volume captured
+    rv = [cache[nm]["retail_vol"] for nm in order]
+    ax[2].bar(xp, rv, 0.6, color=[NZ_COLORS[n] for n in order], edgecolor="black", lw=0.5)
+    ax[2].set_xticks(xp); ax[2].set_xticklabels([_gs_short(n) for n in order], fontsize=8, rotation=20, ha="right")
+    ax[2].set_ylabel("retail volume captured ($, per sim)")
+    ax[2].set_title("(C) retail volume captured (the trade-off)", fontsize=10.5, fontweight="bold")
+    ax[0].grid(alpha=0.25, axis="y"); ax[2].grid(alpha=0.25, axis="y")
+    fig.suptitle("§12 — why Guidestar out-marks Nezlobin at base arrival ($1M, 16 seeds)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def plot_nz_sensitivity(cache: dict | None = None):
+    """Final total LP markout ($) for each pool vs (A) retail arrival multiplier,
+    (B) order-size mean multiplier, (C) price-volatility multiplier — at $1M / §8
+    normalizer. Dashed vertical = the calibrated (×1) point."""
+    if cache is None:
+        cache = load_nezlobin_sensitivity()
+    order = cache["meta"]["pool_order"]
+    fig, ax = plt.subplots(1, 3, figsize=(16, 4.6))
+    panels = [("arrival", "(A) vs retail arrival ×"), ("size", "(B) vs order-size mean ×"),
+              ("vol", "(C) vs price volatility ×")]
+    for k, (key, ttl) in enumerate(panels):
+        s = cache[key]; xs = np.array(s["mults"], dtype=float)
+        for nm in order:
+            ax[k].plot(xs, s[nm]["total"], "o-", color=NZ_COLORS[nm], lw=2, ms=4,
+                       label=_gs_short(nm), zorder=3 if "Nezlobin" in nm else 2)
+        ax[k].axvline(1.0, color="grey", ls="--", lw=1)
+        ax[k].axhline(0, color="grey", lw=0.7); ax[k].set_xscale("log")
+        ax[k].set_xticks(xs); ax[k].set_xticklabels([f"{x:g}" for x in xs])
+        ax[k].set_title(ttl, fontsize=10.5, fontweight="bold"); _gs_bare(ax[k])
+        ax[k].set_xlabel("multiplier (log); dashed = calibrated")
+    ax[0].set_ylabel("final total LP markout ($)"); ax[0].legend(fontsize=7.5)
+    fig.suptitle("§12 — Nezlobin vs baselines: sensitivity to arrival, size, and volatility ($1M, 12 seeds)",
+                 fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
