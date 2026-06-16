@@ -1656,3 +1656,138 @@ def plot_gs_adaptive(reg: dict | None = None):
     fig.suptitle("§11 — adaptive policies vs the static pools ($1M pool, 12 seeds)", fontweight="bold", fontsize=11)
     fig.tight_layout()
     return fig
+
+
+# ============================ §12 — Nezlobin depth-sweep backtest ============================
+NZ_COLORS = {"Nezlobin (doc spec)": "#c0392b", "Guidestar (real params)": "#8e44ad",
+             "flat 9bp (4.5/4.5, dyn off)": "#e67e22", "flat 5bp (incumbent)": "#2980b9"}
+
+
+def load_nezlobin_backtest() -> dict:
+    """Cached doc-aligned Nezlobin depth-sweep backtest
+    (analysis/.../nezlobin_backtest_cache.json, from scripts/calibration/nezlobin_backtest.py)."""
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_backtest_cache.json").read_text())
+
+
+def _nz_depths(cache):
+    return sorted(cache["meta"]["depths"])
+
+
+def plot_nz_depth_sweep(cache: dict | None = None):
+    """Headline: final 15s-forward LP markout ($) vs pool depth ($0.5M–$5M), against
+    the §8 full-market normalizer, split into total / retail(+) / arb-LVR(−)."""
+    if cache is None:
+        cache = load_nezlobin_backtest()
+    order = cache["meta"]["pool_order"]
+    depths = _nz_depths(cache)
+    xs = np.array(depths) / 1e6
+    fig, ax = plt.subplots(1, 3, figsize=(15.5, 4.6), sharex=True)
+    comps = [("tot", "TOTAL LP markout"), ("ret", "Retail markout (+)"), ("arb", "Arb / LVR markout (−)")]
+    for nm in order:
+        for j, (c, _) in enumerate(comps):
+            ys = [cache["finals"][f"{d:.0f}"][nm][c] for d in depths]
+            ax[j].plot(xs, ys, "o-", color=NZ_COLORS[nm], lw=2, ms=5, label=_gs_short(nm))
+    for j, (_, ttl) in enumerate(comps):
+        ax[j].set_title(ttl, fontsize=11, fontweight="bold")
+        ax[j].set_xlabel("pool depth ($M, log)"); ax[j].set_xscale("log")
+        ax[j].set_xticks(xs); ax[j].set_xticklabels([f"{x:g}" for x in xs])
+        ax[j].axhline(0, color="grey", lw=0.7); _gs_bare(ax[j])
+    ax[0].set_ylabel("final cumulative markout ($)"); ax[0].legend(fontsize=8)
+    d_m = cache["meta"]["primary_depth"] / 1e6
+    fig.suptitle(f"§12 — doc-aligned Nezlobin vs baselines: final 15s LP markout by depth "
+                 f"(§8 normalizer, {cache['meta']['seeds']} seeds, bottom-of-block arb)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def plot_nz_volume(cache: dict | None = None):
+    """Retail volume captured ($ per sim) vs pool depth, per pool."""
+    if cache is None:
+        cache = load_nezlobin_backtest()
+    order = cache["meta"]["pool_order"]; depths = _nz_depths(cache)
+    xs = np.array(depths) / 1e6
+    fig, ax = plt.subplots(figsize=(8.5, 4.6))
+    for nm in order:
+        ys = [cache["volume"][f"{d:.0f}"][nm] for d in depths]
+        ax.plot(xs, ys, "o-", color=NZ_COLORS[nm], lw=2, ms=5, label=_gs_short(nm))
+    ax.set_xscale("log"); ax.set_xticks(xs); ax.set_xticklabels([f"{x:g}" for x in xs])
+    ax.set_xlabel("pool depth ($M, log)"); ax.set_ylabel("retail volume captured ($, per sim)")
+    ax.legend(fontsize=8); _gs_bare(ax)
+    ax.set_title("§12 — retail volume captured by depth", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def plot_nz_cumulative(cache: dict | None = None):
+    """Cumulative 15s-forward LP markout over the run at the primary depth (mean±sd,
+    seeds), total + retail(+)/arb(−) components."""
+    if cache is None:
+        cache = load_nezlobin_backtest()
+    x = np.array(cache["cumulative_steps"]); order = cache["meta"]["pool_order"]
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.4), sharex=True)
+    comps = [("tot", "TOTAL LP markout"), ("ret", "Retail markout (+)"), ("arb", "Arb / LVR markout (−)")]
+    for nm in order:
+        for j, (c, _) in enumerate(comps):
+            d = cache["cumulative"][nm][c]; mean = np.array(d["mean"]); sd = np.array(d["sd"])
+            ax[j].plot(x, mean, color=NZ_COLORS[nm], lw=2, label=_gs_short(nm))
+            ax[j].fill_between(x, mean - sd, mean + sd, color=NZ_COLORS[nm], alpha=0.10)
+    for j, (_, ttl) in enumerate(comps):
+        ax[j].set_title(ttl, fontsize=11, fontweight="bold"); ax[j].set_xlabel("step (12s)")
+        ax[j].axhline(0, color="grey", lw=0.7); _gs_bare(ax[j])
+    ax[0].set_ylabel("cumulative markout ($)"); ax[0].legend(fontsize=8, loc="upper left")
+    d_m = cache["meta"]["primary_depth"] / 1e6
+    fig.suptitle(f"§12 — cumulative 15s LP markout at ${d_m:g}M depth (mean±sd, {cache['meta']['seeds']} seeds)",
+                 fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def plot_nz_histograms(cache: dict | None = None):
+    """Per-trade 15s markout (bps) distribution at the primary depth (log + linear)."""
+    if cache is None:
+        cache = load_nezlobin_backtest()
+    bins = np.array(cache["histogram"]["bins"]); ctr = 0.5 * (bins[:-1] + bins[1:])
+    fig, ax = plt.subplots(1, 2, figsize=(13, 4.4))
+    for nm in cache["meta"]["pool_order"]:
+        dens = np.array(cache["histogram"][nm])
+        ax[0].plot(ctr, dens, drawstyle="steps-mid", lw=2, color=NZ_COLORS[nm], label=_gs_short(nm))
+        ax[1].plot(ctr, dens, drawstyle="steps-mid", lw=2, color=NZ_COLORS[nm])
+    ax[0].set_yscale("log"); ax[0].set_title("per-trade markout (bps) — log density (tails)", fontsize=11, fontweight="bold")
+    ax[1].set_title("per-trade markout (bps) — linear (body)", fontsize=11, fontweight="bold")
+    for a in ax:
+        a.axvline(0, color="grey", lw=0.7); a.set_xlabel("LP markout per trade (bps)"); _gs_bare(a)
+    ax[0].legend(fontsize=8)
+    d_m = cache["meta"]["primary_depth"] / 1e6
+    fig.suptitle(f"§12 — per-trade markout distribution at ${d_m:g}M depth", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def plot_nz_by_size(cache: dict | None = None, min_count: int = 30):
+    """Markout by captured trade size at the primary depth: retail median-gated mean
+    markout (bps), total markout ($) over all trades (empty bins masked), and captured
+    volume ($), per pool."""
+    if cache is None:
+        cache = load_nezlobin_backtest()
+    order = cache["meta"]["pool_order"]; ctr = np.array(cache["by_size"]["centers"])
+    fig, ax = plt.subplots(1, 3, figsize=(15, 4.6))
+    for nm in order:
+        bs = cache["by_size"][nm]; c = NZ_COLORS[nm]
+        rm = np.array([np.nan if v is None else v for v in bs["retail_mean_bps"]], dtype=float)
+        ne = np.array(bs["all_count"], dtype=float) > 0
+        ax[0].plot(ctr, rm, "o-", color=c, lw=2, ms=4, label=_gs_short(nm))
+        ax[1].plot(ctr, np.where(ne, bs["total_usd"], np.nan), "o-", color=c, lw=2, ms=4)
+        ax[2].plot(ctr, np.where(ne, bs["volume"], np.nan), "o-", color=c, lw=2, ms=4)
+    ax[0].set_title(f"Retail mean LP markout (bps), bins ≥{min_count}", fontsize=10.5, fontweight="bold")
+    ax[0].set_ylabel("markout (bps)"); ax[0].legend(fontsize=8)
+    ax[1].set_title("All trades: total LP markout ($)", fontsize=10.5, fontweight="bold")
+    ax[1].set_ylabel("markout ($, per sim)")
+    ax[2].set_title("Captured volume ($)", fontsize=10.5, fontweight="bold")
+    ax[2].set_ylabel("volume ($, per sim)")
+    for a in ax:
+        a.set_xscale("log"); a.axhline(0, color="grey", lw=0.7); a.set_xlabel("captured notional per trade ($)"); _gs_bare(a)
+    d_m = cache["meta"]["primary_depth"] / 1e6
+    fig.suptitle(f"§12 — markout by captured trade size at ${d_m:g}M depth", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
