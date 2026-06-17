@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "seeds": 16,
+    "depth": 1000000.0
+  },
+  "autocorr": {
+    "n_buy": 11819,
+    "n_sell": 11331,
+    "n_none": 56850,
+    "n_total": 80000,
+    "uncond_p_buy": 0.5105399568034558,
+    "p_buy_after_buy": 0.40712532791740713,
+    "p_sell_after_buy": 0.039942455784039946,
+    "p_none_after_buy": 0.5529322162985529,
+    "p_cont_given_next_arb": 0.9106568237743706,
+    "lag1_autocorr_signed": 0.814515323092815,
+    "offset_after_buy_bps": -6.126813950131689,
+    "offset_after_sell_bps": 6.598683599950462
+  },
+  "skew": {
+    "n_arb": 22473,
+    "frac_skew_on_arb_side": 0.5337516130467672,
+    "mean_skew_on_arb_side_bps": 0.6300800380362395,
+    "arb_mk_total_per_seed": -561.9533726765928
+  },
+  "flat_arb_mk_per_seed": -564.4134946653141
+}
