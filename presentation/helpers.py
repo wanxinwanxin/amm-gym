@@ -2052,3 +2052,45 @@ def plot_nz_claim_lvr(cache: dict | None = None):
                  fontsize=10, fontweight="bold")
     fig.tight_layout()
     return fig
+
+
+def load_nezlobin_skew_lvr() -> dict:
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_skew_lvr_cache.json").read_text())
+
+
+def plot_nz_claim_skew_lvr(cache: dict | None = None, regime_skew_capture: float = 3.0):
+    """O4, isolated — does the top-of-block EMA directional skew capture LVR, and how
+    does it depend on return autocorrelation (momentum)? Swap an AR(1) momentum price
+    process (tunable ρ, vol matched to the regime process) onto the sim. (A) LVR
+    captured by the skew-only pool and by Guidestar, each = (its arb loss) − (the
+    equal-spread flat's arb loss), vs ρ: the skew captures a little and it grows with
+    momentum, but is dwarfed by Guidestar's persistent defense; at ρ≈0 (our market) the
+    skew captures almost nothing. (B) arb/LVR loss per pool vs ρ."""
+    if cache is None:
+        cache = load_nezlobin_skew_lvr()
+    rhos = np.array(cache["meta"]["rhos"], dtype=float)
+    flat = np.array(cache["flat 9bp"]["arb"])
+    skew_cap = np.array(cache["skew-only"]["arb"]) - flat
+    gs_cap = np.array(cache["Guidestar"]["arb"]) - flat
+    fig, ax = plt.subplots(1, 2, figsize=(14, 4.8))
+    ax[0].plot(rhos, skew_cap, "o-", color="#c0392b", lw=2, ms=5, label="EMA skew (skew-only)")
+    ax[0].plot(rhos, gs_cap, "o-", color="#8e44ad", lw=2, ms=5, label="Guidestar (persistent defense)")
+    ax[0].axhline(0, color="grey", lw=0.7)
+    ax[0].axvline(0, color="grey", ls="--", lw=1)
+    ax[0].annotate(f"our market (regime, ρ≈0):\nskew captures ≈ ${regime_skew_capture:.0f} (0.4% of LVR)",
+                   (0.0, skew_cap[0]), fontsize=8, xytext=(12, -28), textcoords="offset points",
+                   arrowprops=dict(arrowstyle="->", color="grey", lw=0.8))
+    ax[0].set_xlabel("return autocorrelation ρ (momentum)"); ax[0].set_ylabel("LVR captured vs equal-spread flat ($)")
+    ax[0].set_title("(A) skew captures LVR ∝ momentum — but ≪ Guidestar", fontsize=10.5, fontweight="bold")
+    ax[0].legend(fontsize=8); _gs_bare(ax[0])
+    for nm, c in [("flat 9bp", "#e67e22"), ("skew-only", "#c0392b"), ("Guidestar", "#8e44ad")]:
+        ax[1].plot(rhos, cache[nm]["arb"], "o-", color=c, lw=2, ms=4, label=_gs_short(nm) if "(" in nm else nm)
+    ax[1].axvline(0, color="grey", ls="--", lw=1); ax[1].axhline(0, color="grey", lw=0.7)
+    ax[1].set_xlabel("return autocorrelation ρ (momentum)"); ax[1].set_ylabel("arb / LVR markout ($)")
+    ax[1].set_title("(B) arb/LVR loss per pool vs momentum", fontsize=10.5, fontweight="bold")
+    ax[1].legend(fontsize=8); _gs_bare(ax[1])
+    fig.suptitle(f"§13·O4 — the EMA directional-skew LVR mechanism (AR(1) price, σ={cache['meta']['sigma_bps']:.0f}bps, "
+                 f"{cache['meta']['seeds']} seeds)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
