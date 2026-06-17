@@ -1851,7 +1851,7 @@ def plot_nezlobin_dynamics(scenario: dict | None = None):
     ax[1, 1].plot(moves * 1e4, bd, color="#c0392b", lw=1.8, label="bid fee (sell)")
     ax[1, 1].plot(moves * 1e4, ak, color="#2980b9", lw=1.8, label="ask fee (buy)")
     ax[1, 1].axhline(4.5, color="grey", ls=":", lw=1); ax[1, 1].axvline(0, color="grey", lw=0.6)
-    ax[1, 1].set_title("(D) intra-block surcharge vs move — ½·move (revert) vs max(α·move, d)", fontsize=10, fontweight="bold")
+    ax[1, 1].set_title("(D) intra-block surcharge vs move — ½·move (revert) vs min(α·move, d)", fontsize=10, fontweight="bold")
     ax[1, 1].set_ylabel("fee (bps)"); ax[1, 1].set_xlabel("intra-block move P_BS−P_TOB (bps)"); ax[1, 1].legend(fontsize=8)
     for a in ax.ravel():
         _gs_bare(a)
@@ -1935,5 +1935,120 @@ def plot_nz_sensitivity(cache: dict | None = None):
     ax[0].set_ylabel("final total LP markout ($)"); ax[0].legend(fontsize=7.5)
     fig.suptitle("§12 — Nezlobin vs baselines: sensitivity to arrival, size, and volatility ($1M, 12 seeds)",
                  fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+# ============================ §13 — verifying the doc's claims ============================
+def _cpmm_backrun(depth, fair, p_tob, p1, surcharge, resting=4.5e-4, half=0.5, frac_step=1e-5):
+    """Numerically run a split backrun of a pool dislocated to mid p1, reverting toward
+    `fair`, under the Nezlobin bid surcharge ½·(mid−P_TOB)/mid (referenced to p_tob) or a
+    flat `resting` fee. Returns final mid, backrunner profit, LP fee capture, x sold —
+    all in fair-USDC units. The backrunner sells while the fee-adjusted bid > fair."""
+    x = depth / p1; y = float(depth)
+    lp_fee_x = x_sold = y_recv = 0.0
+    dx = x * frac_step
+    for _ in range(2_000_000):
+        mid = y / x
+        sc = half * max(0.0, (mid - p_tob) / mid) if surcharge else 0.0
+        f = resting + sc
+        if mid * (1.0 - f) <= fair:
+            break
+        k = x * y
+        y_new = k / (x + (1.0 - f) * dx)        # swap uses (1−f)·dx; fee f·dx retained in x
+        y_recv += y - y_new
+        x += dx; y = y_new
+        lp_fee_x += f * dx; x_sold += dx
+    return dict(final_mid=y / x, br_profit=y_recv - x_sold * fair,
+                lp_capture=lp_fee_x * fair, x_sold=x_sold)
+
+
+def plot_nz_claim_backrun(depth=1_000_000.0, fair=100.0):
+    """Verify the doc's central backrun claims with a scripted split backrun.
+    (A) for a 1% dislocation opened at fair: backrunner profit vs LP capture under a flat
+    fee vs the Nezlobin surcharge — the surcharge splits the value ~½/½ (the basis for
+    'sandwich profit halved'). (B) LP capture vs dislocation size — it scales with the
+    move (so extraction needs LARGE uninformed trades). (C) the corner case: when the
+    block opens OFF fair (P_TOB ≠ fair), the surcharge is referenced to P_TOB, so the
+    backrun under-corrects (final mid stays above fair) — 'full correction' fails."""
+    fig, ax = plt.subplots(1, 3, figsize=(16, 4.6))
+    # (A) value split at a 1% dislocation, block opened at fair
+    p1 = fair * 1.01
+    lvr = _cpmm_backrun(depth, fair, fair, p1, surcharge=False, resting=0.0)["br_profit"]  # total available
+    nez = _cpmm_backrun(depth, fair, fair, p1, surcharge=True)
+    flat = _cpmm_backrun(depth, fair, fair, p1, surcharge=False, resting=4.5e-4)
+    xp = np.arange(2); w = 0.35
+    ax[0].bar(xp - w / 2, [flat["br_profit"], nez["br_profit"]], w, label="backrunner profit", color="#7f8c8d")
+    ax[0].bar(xp + w / 2, [flat["lp_capture"], nez["lp_capture"]], w, label="LP capture", color="#27ae60")
+    ax[0].axhline(0.5 * lvr, color="#c0392b", ls="--", lw=1.2, label="½ × total value (LVR)")
+    ax[0].set_xticks(xp); ax[0].set_xticklabels(["flat 4.5bp", "Nezlobin surcharge"], fontsize=9)
+    ax[0].set_ylabel("value ($, per $1 backrun of a 1% move)"); ax[0].legend(fontsize=8)
+    ax[0].set_title("(A) surcharge splits backrun ~½ to LPs", fontsize=10.5, fontweight="bold")
+    # (B) LP capture vs dislocation size
+    moves = np.linspace(0.0005, 0.03, 24)
+    lpc = [_cpmm_backrun(depth, fair, fair, fair * (1 + mv), surcharge=True)["lp_capture"] for mv in moves]
+    halflvr = [0.5 * _cpmm_backrun(depth, fair, fair, fair * (1 + mv), surcharge=False, resting=0.0)["br_profit"] for mv in moves]
+    ax[1].plot(moves * 1e4, lpc, "o-", color="#27ae60", lw=2, ms=3, label="LP capture (Nezlobin)")
+    ax[1].plot(moves * 1e4, halflvr, "--", color="#c0392b", lw=1.2, label="½ × LVR")
+    ax[1].set_xlabel("dislocation P1 − fair (bps)"); ax[1].set_ylabel("LP capture ($)")
+    ax[1].set_title("(B) extraction scales with trade size", fontsize=10.5, fontweight="bold"); ax[1].legend(fontsize=8)
+    # (C) corner case: block opened off fair -> under-correction
+    offsets = np.linspace(0, -0.02, 21)            # P_TOB below fair by 0..200 bps
+    finals = [_cpmm_backrun(depth, fair, fair * (1 + off), fair * 1.01, surcharge=True)["final_mid"] for off in offsets]
+    ax[2].plot(-offsets * 1e4, (np.array(finals) - fair) / fair * 1e4, "o-", color="#8e44ad", lw=2, ms=3)
+    ax[2].axhline(0, color="grey", lw=0.8)
+    ax[2].set_xlabel("block opened below fair, |P_TOB − fair| (bps)")
+    ax[2].set_ylabel("residual misprice after backrun (bps)")
+    ax[2].set_title("(C) off-fair open ⇒ under-correction", fontsize=10.5, fontweight="bold")
+    for a in ax:
+        _gs_bare(a)
+    fig.suptitle("§13 — verifying the backrun claims (scripted split backrun, $1M pool)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def load_nezlobin_claims() -> dict:
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_claims_cache.json").read_text())
+
+
+def plot_nz_claim_spread(cache: dict | None = None):
+    """O1 — 'constant spread in most blocks'. Histogram of the Nezlobin pool's
+    top-of-block resting spread (f_a+f_b) across a sim; almost all blocks sit at TS,
+    with a small tail widened by the big-PI exception."""
+    if cache is None:
+        cache = load_nezlobin_claims()
+    edges = np.array(cache["hist_edges"]); hist = np.array(cache["hist"])
+    ctr = 0.5 * (edges[:-1] + edges[1:])
+    fig, ax = plt.subplots(figsize=(8.5, 4.6))
+    ax.bar(ctr, np.maximum(hist, 0.1), width=np.diff(edges), color="#16a085", align="center", edgecolor="none")
+    ax.axvline(cache["ts_bps"], color="#c0392b", ls="--", lw=1.4, label=f"TS = {cache['ts_bps']:g} bps")
+    ax.set_yscale("log"); ax.set_xlabel("top-of-block resting spread (bps)"); ax.set_ylabel("blocks (log)")
+    ax.legend(fontsize=9); _gs_bare(ax)
+    ax.set_title(f"§13·O1 — constant spread: {cache['frac_at_ts']*100:.1f}% of blocks at TS, "
+                 f"{cache['frac_widened']*100:.1f}% widened by the exception (max {cache['max_spread']:.0f} bps)",
+                 fontsize=10.5, fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
+def plot_nz_claim_lvr(cache: dict | None = None):
+    """O4 — 'reduces LVR by adjusting directional fees'. Arb/LVR loss ($) for the
+    equal-spread flat (4.5/4.5 = same TS, dynamics off), Nezlobin, and Guidestar.
+    Nezlobin's arb loss is ~identical to the equal-spread flat — its directional fee
+    does NOT reduce LVR here — whereas Guidestar's persistent defense does."""
+    if cache is None:
+        cache = load_nezlobin_intuition()
+    pools = ["flat 9bp (4.5/4.5, dyn off)", "Nezlobin (doc spec)", "Guidestar (real params)"]
+    arb = [cache[nm]["arb_total"] for nm in pools]
+    fig, ax = plt.subplots(figsize=(8.5, 4.6))
+    ax.bar(range(len(pools)), arb, 0.6, color=[NZ_COLORS[nm] for nm in pools], edgecolor="black", lw=0.5)
+    ax.axhline(arb[0], color="grey", ls=":", lw=1.2)
+    for i, v in enumerate(arb):
+        ax.annotate(f"{v:.0f}", (i, v), ha="center", va="top", fontsize=9, xytext=(0, -3), textcoords="offset points")
+    ax.set_xticks(range(len(pools))); ax.set_xticklabels([_gs_short(p) for p in pools], fontsize=9)
+    ax.set_ylabel("arb / LVR markout ($, per sim)"); _gs_bare(ax); ax.grid(alpha=0.25, axis="y")
+    ax.set_title("§13·O4 — does the directional fee reduce LVR? Nezlobin ≈ equal-spread flat (no); Guidestar (yes)",
+                 fontsize=10, fontweight="bold")
     fig.tight_layout()
     return fig
