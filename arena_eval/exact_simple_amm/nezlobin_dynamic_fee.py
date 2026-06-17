@@ -48,6 +48,8 @@ class NezlobinDynamicFeeStrategy:
     beta: float = 0.25             # skew gain on EMA price impact (doc β; unspecified -> default)
     ema_weight: float = 0.5        # EMA weight on the newest block's PI (heavy-recent)
     cutoff_bps: float = 10.0       # big-PI exception threshold on the previous block's |PI|
+    surcharge_on: bool = True      # intra-block ½·move / min(α·move,d) surcharge (set False to isolate the skew)
+    exception_on: bool = True      # big-PI spread-widening exception
 
     # internal state (fractions)
     _ts: float = field(default=0.0, init=False)
@@ -96,7 +98,7 @@ class NezlobinDynamicFeeStrategy:
             return (min(self._fb, _CAP), min(self._fa, _CAP))   # first swap of block: resting, no surcharge
         fb, fa = self._fb, self._fa
         p0 = self._p0
-        if p0 > 0.0 and spot != p0:
+        if self.surcharge_on and p0 > 0.0 and spot != p0:
             if spot > p0:                                       # rose: revert = bid, continuation = ask
                 m = (spot - p0) / spot
                 fb = fb + self.half * m
@@ -128,7 +130,7 @@ class NezlobinDynamicFeeStrategy:
         # 4. big-PI exception: widen the spread to capture an un-backrun large move,
         #    loading the extra onto the reverting (opposite-to-impact) side. Bypass
         #    the block after one is applied.
-        if abs(pi1) > self._cutoff and not self._bypass_next:
+        if self.exception_on and abs(pi1) > self._cutoff and not self._bypass_next:
             extra = self.half * abs(pi1)
             if pi1 > 0.0:        # up impact -> reverting side is the bid
                 fb = fb + extra
