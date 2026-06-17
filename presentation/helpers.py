@@ -2094,3 +2094,105 @@ def plot_nz_claim_skew_lvr(cache: dict | None = None, regime_skew_capture: float
                  f"{cache['meta']['seeds']} seeds)", fontweight="bold", fontsize=11)
     fig.tight_layout()
     return fig
+
+
+def load_nezlobin_arb_autocorr() -> dict:
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_arb_autocorr_cache.json").read_text())
+
+
+def plot_nz_arb_autocorr(cache: dict | None = None):
+    """O4, the real mechanism — ARB DIRECTION is autocorrelated under a MARTINGALE fair
+    price. After a buy arb the pool mid is left at (1−f)·fair < fair (the arb stops when
+    after-fee marginal price = fair), so fair sits at the ASK edge of the no-arb band: any
+    up move re-triggers a buy arb, while a sell arb needs fair to cross the whole spread.
+    (A) conditional on a BUY arb, the next arb is overwhelmingly another buy, not a sell.
+    (B) the block-open mid is parked offset (below fair after a buy, above after a sell) —
+    the offset is what makes the next arb's side predictable. No price momentum needed."""
+    if cache is None:
+        cache = load_nezlobin_arb_autocorr()
+    ac = cache["autocorr"]
+    fig, ax = plt.subplots(1, 2, figsize=(13.5, 4.7))
+    # (A) what follows a buy arb
+    labels = ["next arb\nBUY (continue)", "next arb\nSELL (reverse)", "no arb\nnext block"]
+    vals = [ac["p_buy_after_buy"], ac["p_sell_after_buy"], ac["p_none_after_buy"]]
+    cols = ["#c0392b", "#2980b9", "#bdc3c7"]
+    ax[0].bar(range(3), vals, 0.62, color=cols, edgecolor="black", lw=0.5)
+    for i, v in enumerate(vals):
+        ax[0].annotate(f"{v:.1%}", (i, v), ha="center", va="bottom", fontsize=10, xytext=(0, 2), textcoords="offset points")
+    ax[0].set_xticks(range(3)); ax[0].set_xticklabels(labels, fontsize=9)
+    ax[0].set_ylabel("P( · | this block was a BUY arb )"); ax[0].set_ylim(0, max(vals) * 1.25)
+    ax[0].set_title("(A) conditional on a buy arb, the next arb continues the side", fontsize=10.5, fontweight="bold")
+    ax[0].annotate(f"P(continue | next block has an arb) = {ac['p_cont_given_next_arb']:.0%}\n"
+                   f"lag-1 autocorr of arb direction = {ac['lag1_autocorr_signed']:+.2f}\n"
+                   f"(fair-price return autocorr ≈ 0 — martingale)",
+                   (0.5, 0.82), xycoords="axes fraction", fontsize=8.5, ha="left",
+                   bbox=dict(boxstyle="round", fc="#fdf6e3", ec="grey", lw=0.6))
+    _gs_bare(ax[0])
+    # (B) the offset that drives it
+    ob, os_ = ac["offset_after_buy_bps"], ac["offset_after_sell_bps"]
+    ax[1].bar([0, 1], [ob, os_], 0.55, color=["#c0392b", "#2980b9"], edgecolor="black", lw=0.5)
+    ax[1].axhline(0, color="grey", lw=0.9)
+    for i, v in enumerate([ob, os_]):
+        ax[1].annotate(f"{v:+.1f} bps", (i, v), ha="center", va="bottom" if v > 0 else "top",
+                       fontsize=10, xytext=(0, 3 if v > 0 else -3), textcoords="offset points")
+    ax[1].set_xticks([0, 1]); ax[1].set_xticklabels(["after a BUY arb\n(mid below fair)", "after a SELL arb\n(mid above fair)"], fontsize=9)
+    ax[1].set_ylabel("block-open offset  (mid − fair) / fair  [bps]")
+    ax[1].set_title("(B) the mid is parked offset toward the last arb's side", fontsize=10.5, fontweight="bold")
+    _gs_bare(ax[1])
+    fig.suptitle(f"§13·O4 — why a directional skew COULD capture LVR: arb-direction autocorrelation under a martingale "
+                 f"(flat 4.5/4.5, {cache['meta']['seeds']} seeds)", fontweight="bold", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def load_nezlobin_skew_fix() -> dict:
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_skew_fix_cache.json").read_text())
+
+
+def plot_nz_skew_sweep(cache: dict | None = None):
+    """O4, the diagnosis — sweep the skew LOAD with an offset-IMMUNE signal (skew next
+    block toward the directly observed last-arb direction). LEFT axis: total LP markout
+    captured vs the flat 4.5/4.5 baseline ($/seed). RIGHT axis: the realized arb-direction
+    persistence. Capture peaks at LIGHT load then BACKFIRES, exactly as persistence
+    collapses — the skew widens the offset that creates the persistence, flattening the
+    band and destroying the autocorrelation it exploits. The doc's EMA-of-PI skew (★) sits
+    below even a light clean-signal skew because its signal is diluted (lands on the arb's
+    side ~53% vs ~80%). Self-defeating, with a ceiling of only ~+$4.5/seed (~0.85%)."""
+    if cache is None:
+        cache = load_nezlobin_skew_fix()
+    sw = cache["sweep"]
+    fa = np.array([4.5 + s["load"] * 4.5 for s in sw])
+    delta = np.array([s["delta_total_vs_flat"] for s in sw])
+    persist = np.array([s["persistence"] for s in sw])
+    onside = np.array([s["skew_on_arb_side"] for s in sw])
+    fig, ax = plt.subplots(figsize=(10.5, 5.2))
+    ax.axhline(0, color="grey", lw=0.8)
+    l1, = ax.plot(fa, delta, "o-", color="#16a085", lw=2.4, ms=6, label="LP markout captured vs flat ($/seed)")
+    ipk = int(np.argmax(delta))
+    ax.annotate(f"peak +${delta[ipk]:.1f}/seed at {fa[ipk]:.1f}/{9 - fa[ipk]:.1f} bp", (fa[ipk], delta[ipk]),
+                fontsize=9, xytext=(28, -20), textcoords="offset points",
+                arrowprops=dict(arrowstyle="->", color="#16a085", lw=0.9), color="#0e6b5a", fontweight="bold")
+    de = cache.get("doc_ema")
+    if de is not None:
+        ax.scatter([4.5], [de["delta_total_vs_flat"]], marker="*", s=320, color="#c0392b", edgecolor="black",
+                   zorder=5, label=f"doc EMA-of-PI skew (on-side {de['skew_on_arb_side']:.0%})")
+    ax.set_xlabel("ask fee fa (bid fb = 9 − fa)  →  more aggressive skew")
+    ax.set_ylabel("LP markout captured vs flat 4.5/4.5  ($/seed)", color="#0e6b5a")
+    ax.tick_params(axis="y", labelcolor="#0e6b5a")
+    _gs_bare(ax)
+    ax2 = ax.twinx()
+    l2, = ax2.plot(fa, persist, "s--", color="#8e44ad", lw=1.8, ms=5, label="arb-direction persistence (right)")
+    l3, = ax2.plot(fa, onside, "^:", color="#d35400", lw=1.6, ms=5, label="skew lands on arb's side (right)")
+    ax2.axhline(0.5, color="#8e44ad", ls=":", lw=0.8, alpha=0.6)
+    ax2.set_ylabel("persistence / on-side rate", color="#5b2c6f"); ax2.tick_params(axis="y", labelcolor="#5b2c6f")
+    ax2.set_ylim(0.35, 0.85); ax2.spines["top"].set_visible(False)
+    ax.legend(handles=[l1, l2, l3] + ([ax.collections[0]] if de is not None else []),
+              fontsize=8.5, loc="lower left")
+    ax.set_title("§13·O4 — the skew is self-defeating: capture peaks at light load, then backfires as it\n"
+                 "destroys the arb-direction persistence it exploits  (offset-immune signal, "
+                 f"{cache['meta']['seeds']} seeds, $1M / §8 normalizer)", fontsize=10, fontweight="bold", pad=14)
+    ax.margins(y=0.12)
+    fig.tight_layout()
+    return fig
