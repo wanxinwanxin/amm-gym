@@ -8,9 +8,9 @@ current swap ``n``.
 INTRA-BLOCK (swaps n>1). With the move measured as a fraction of the current price,
 ``m = (P_BS − P_TOB)/P_BS``:
   - price rose (P_BS > P_TOB): the REVERTING (bid/sell) side is taxed by half the
-    move and the CONTINUATION (ask/buy) side gets a smaller, floored bump:
+    move and the CONTINUATION (ask/buy) side gets a small bump capped at d:
         f_b(n) = f_b + ½·m
-        f_a(n) = f_a + max(α·m, d)
+        f_a(n) = f_a + min(α·m, d)        # d ("maximum fading") ≈ 2 bps
   - price fell: mirror (reverting = ask, continuation = bid), with m = (P_TOB−P_BS)/P_BS.
 The first swap of a block (the arb) pays the resting f_b, f_a with no surcharge.
 
@@ -100,11 +100,11 @@ class NezlobinDynamicFeeStrategy:
             if spot > p0:                                       # rose: revert = bid, continuation = ask
                 m = (spot - p0) / spot
                 fb = fb + self.half * m
-                fa = fa + max(self.alpha * m, self._d)
+                fa = fa + min(self.alpha * m, self._d)          # continuation: small, capped at d ("max fading")
             else:                                               # fell: revert = ask, continuation = bid
                 m = (p0 - spot) / spot
                 fa = fa + self.half * m
-                fb = fb + max(self.alpha * m, self._d)
+                fb = fb + min(self.alpha * m, self._d)
         return (min(fb, _CAP), min(fa, _CAP))
 
     # ---- internals ----------------------------------------------------------

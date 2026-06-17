@@ -27,7 +27,7 @@ def test_intra_block_surcharge_rose():
     bid, ask = _swap(s, 0, 101.0)                     # +1% intra-block, n>1
     m = 1.0 / 101.0
     assert math.isclose(bid, 4.5e-4 + 0.5 * m, abs_tol=1e-7)            # reverting (bid) += half the move
-    assert math.isclose(ask, 4.5e-4 + max(0.25 * m, 2e-4), abs_tol=1e-7)  # continuation (ask) += max(alpha*m, d)
+    assert math.isclose(ask, 4.5e-4 + min(0.25 * m, 2e-4), abs_tol=1e-7)  # continuation (ask) += min(alpha*m, d)
 
 
 def test_intra_block_surcharge_fell_is_mirror():
@@ -37,15 +37,16 @@ def test_intra_block_surcharge_fell_is_mirror():
     bid, ask = _swap(s, 0, 99.0)                      # -1% intra-block
     m = 1.0 / 99.0
     assert math.isclose(ask, 4.5e-4 + 0.5 * m, abs_tol=1e-7)           # reverting is now the ask
-    assert math.isclose(bid, 4.5e-4 + max(0.25 * m, 2e-4), abs_tol=1e-7)
+    assert math.isclose(bid, 4.5e-4 + min(0.25 * m, 2e-4), abs_tol=1e-7)
 
 
-def test_continuation_side_has_floor_d():
+def test_continuation_side_is_capped_at_d():
     s = NezlobinDynamicFeeStrategy()
     s.after_initialize(10_000.0, 1_000_000.0)
     _swap(s, 0, 100.0)
-    bid, ask = _swap(s, 0, 100.0001)                  # tiny move: alpha*m << d -> continuation floored at d=2bps
-    assert math.isclose(ask, 4.5e-4 + 2e-4, abs_tol=1e-7)
+    bid, ask = _swap(s, 0, 102.0)                     # +2% move: alpha*m >> d -> continuation capped at d=2bps
+    assert math.isclose(ask, 4.5e-4 + 2e-4, abs_tol=1e-7)             # capped at d, not alpha*m
+    assert bid > 4.5e-4 + 0.5 * 0.019                                 # reverting still gets ~half the move
 
 
 def test_first_swap_of_block_is_resting():
