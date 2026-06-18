@@ -2196,3 +2196,71 @@ def plot_nz_skew_sweep(cache: dict | None = None):
     ax.margins(y=0.12)
     fig.tight_layout()
     return fig
+
+
+def load_nezlobin_persistence_intuition() -> dict:
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_persistence_intuition_cache.json").read_text())
+
+
+def _band_panel(ax, st, dens_x, dens_y):
+    """One 'moving no-arb band' panel: the next-move distribution with the continue /
+    no-arb / reverse zones set by the thresholds o+f_a and o−f_b (after a BUY arb)."""
+    tc, tr = st["t_continue_bps"], st["t_reverse_bps"]
+    ax.fill_between(dens_x, 0, dens_y, where=(dens_x >= tc), color="#27ae60", alpha=0.55, label="continue (buy again)", zorder=2)
+    ax.fill_between(dens_x, 0, dens_y, where=(dens_x <= tr), color="#c0392b", alpha=0.55, label="reverse (sell)", zorder=2)
+    ax.fill_between(dens_x, 0, dens_y, where=(dens_x > tr) & (dens_x < tc), color="#bdc3c7", alpha=0.45, label="no arb", zorder=2)
+    ax.plot(dens_x, dens_y, color="black", lw=1.3, zorder=3)
+    ax.axvline(tc, color="#1e8449", lw=2, zorder=4); ax.axvline(tr, color="#922b21", lw=2, zorder=4)
+    ax.axvline(0, color="grey", ls=":", lw=1, zorder=1)
+    ax.annotate(f"continue edge\nr > {tc:+.1f} bp", (tc, max(dens_y) * 0.50), fontsize=8, color="#1e8449",
+                ha="left", xytext=(4, 0), textcoords="offset points")
+    ax.annotate(f"reverse edge\nr < {tr:+.1f} bp", (tr, max(dens_y) * 0.74), fontsize=8, color="#922b21",
+                ha="right", xytext=(-4, 0), textcoords="offset points")
+    fa, fb = st["fa_bps"], st["fb_bps"]
+    ax.set_title(f"after a BUY arb — fee {fa:.1f}/{fb:.1f} bp,  offset o={st['offset_bps']:+.1f} bp\n"
+                 f"P(continue | next block arbs) = {st['p_continue']:.0%}",
+                 fontsize=10, fontweight="bold")
+    ax.set_xlabel("next fair move  r  (bps)"); ax.set_xlim(-30, 30); ax.set_ylim(0, max(dens_y) * 1.12)
+    ax.set_yticks([]); _gs_bare(ax); ax.legend(fontsize=7.5, loc="upper left")
+
+
+def plot_nz_persistence_intuition(cache: dict | None = None):
+    """O4 intuition — WHY skewing the fee destroys the arb-direction persistence it exploits.
+    The next arb's side is set by where the next fair move r lands vs the no-arb band, whose
+    edges (after a buy arb) are the CONTINUE threshold o+f_a and the REVERSE threshold o−f_b.
+    Flat 4.5/4.5: the arb leaves o≈−f_a, so the continue edge ≈ 0 (fair sits right at it →
+    primed to continue) and reversing needs the full spread → strong persistence. Skew 9/0:
+    f_a jumps to 9 but the offset does NOT follow (the free bid side resets the mid toward
+    fair, o≈−2.5), so the continue edge jumps to +6.5 bp while the reverse edge rises to
+    −2.5 bp → the asymmetry inverts, persistence collapses 0.91→0.36. Right panel: the full
+    P(continue)-vs-load collapse."""
+    if cache is None:
+        cache = load_nezlobin_persistence_intuition()
+    mh = cache["move_hist"]
+    edges = np.array(mh["edges"]); dens = np.array(mh["density"])
+    x = 0.5 * (edges[:-1] + edges[1:])
+    by = {round(s["load"], 3): s for s in cache["by_load"]}
+    flat = by[0.0]; full = by[1.0]
+    fig, ax = plt.subplots(1, 3, figsize=(16.5, 4.8))
+    _band_panel(ax[0], flat, x, dens)
+    _band_panel(ax[1], full, x, dens)
+    # right: P(continue) vs load
+    loads = np.array([s["load"] for s in cache["by_load"]])
+    fa = 4.5 + loads * 4.5
+    pc = np.array([s["p_continue"] for s in cache["by_load"]])
+    ax[2].plot(fa, pc, "o-", color="#8e44ad", lw=2.2, ms=7)
+    ax[2].axhline(0.5, color="grey", ls="--", lw=1)
+    ax[2].annotate("persistent\n(skew helps)", (8.4, 0.78), fontsize=8.5, color="#1e8449", ha="center")
+    ax[2].annotate("anti-persistent\n(skew taxes wrong side)", (8.0, 0.40), fontsize=8.5, color="#922b21", ha="center")
+    for s in (flat, full):
+        ax[2].annotate(f"{s['p_continue']:.0%}", (4.5 + s["load"] * 4.5, s["p_continue"]),
+                       fontsize=9, fontweight="bold", xytext=(6, 6), textcoords="offset points")
+    ax[2].set_xlabel("ask fee f_a (bid = 9 − f_a)  →  more skew"); ax[2].set_ylabel("P(continue | next block arbs)")
+    ax[2].set_ylim(0.25, 0.95); ax[2].set_title("the persistence the skew needs\ncollapses as it skews harder",
+                                                 fontsize=10, fontweight="bold")
+    _gs_bare(ax[2])
+    fig.suptitle("§13·O4 — why a directional skew is self-defeating: raising f_a moves fair off the 'continue' edge "
+                 "toward the 'reverse' edge", fontweight="bold", fontsize=11.5)
+    fig.tight_layout()
+    return fig
