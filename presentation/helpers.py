@@ -2264,3 +2264,45 @@ def plot_nz_persistence_intuition(cache: dict | None = None):
                  "toward the 'reverse' edge", fontweight="bold", fontsize=11.5)
     fig.tight_layout()
     return fig
+
+
+def load_nezlobin_lvr_frequency() -> dict:
+    import json
+    return json.loads((ANALYSIS_DIR / "nezlobin_lvr_frequency_cache.json").read_text())
+
+
+def plot_nz_lvr_vs_frequency(cache: dict | None = None):
+    """O4 — does skewing reduce LVR by DETERRING arbs? Sweep the skew load and plot the
+    % change (vs flat 4.5/4.5) in arb COUNT and in arb LVR. The no-arb band width is
+    f_a+f_b = TS = 9 bps for every split, so skewing only slides the band's centre — it
+    never widens the band the price must cross to be arbed. So a light skew deters ~11% of
+    arbs but LVR barely moves (~1%): the deterred mispricing is just corrected later/by a
+    bigger arb. A heavy skew frees the off-side (0 bps), which INCREASES arb count and lets
+    arbs take the mispricing for free, so both count and LVR rise. LVR is set by band width
+    (=TS) and volatility, not by the number of arb events or how TS is split."""
+    if cache is None:
+        cache = load_nezlobin_lvr_frequency()
+    sw = cache["sweep"]
+    fa = np.array([4.5 + s["load"] * 4.5 for s in sw])
+    n0, l0 = sw[0]["n_arb"], sw[0]["lvr_arb"]
+    dn = np.array([100.0 * (s["n_arb"] - n0) / n0 for s in sw])
+    dl = np.array([100.0 * (abs(s["lvr_arb"]) - abs(l0)) / abs(l0) for s in sw])   # % change in LVR loss
+    fig, ax = plt.subplots(figsize=(10.5, 5.2))
+    ax.axhline(0, color="grey", lw=0.9)
+    ax.plot(fa, dn, "o-", color="#2980b9", lw=2.3, ms=6, label="arb COUNT  (Δ% vs flat)")
+    ax.plot(fa, dl, "s-", color="#c0392b", lw=2.3, ms=6, label="arb LVR loss  (Δ% vs flat)")
+    imin = int(np.argmin(dl))
+    ax.annotate(f"light skew (6/3): {dn[2]:+.0f}% arbs but only {dl[2]:+.1f}% LVR\n"
+                f"→ deterring arbs barely moves LVR",
+                (fa[2], dn[2]), fontsize=8.5, xytext=(10, -34), textcoords="offset points",
+                arrowprops=dict(arrowstyle="->", color="grey", lw=0.8))
+    ax.annotate("heavy skew frees the off-side (0 bp):\nmore arbs AND more LVR",
+                (fa[-1], dn[-1]), fontsize=8.5, ha="right", xytext=(-8, -6), textcoords="offset points")
+    ax.set_xlabel("ask fee f_a  (bid f_b = 9 − f_a)  →  more skew   [band width f_a+f_b = 9 bp, constant]")
+    ax.set_ylabel("change vs flat 4.5/4.5  (%)")
+    ax.set_title("§13·O4 — skewing redistributes the fixed 9 bp band, it doesn't widen it:\n"
+                 "arb count moves ~10× more than LVR, because LVR is set by band WIDTH (=TS), not arb count",
+                 fontsize=10, fontweight="bold")
+    ax.legend(fontsize=9, loc="upper center"); _gs_bare(ax)
+    fig.tight_layout()
+    return fig
