@@ -18,7 +18,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from arena_eval.core.types import IncomingSwap, TradeInfo  # noqa: E402
 from arena_eval.exact_simple_amm.arb_only_lab import (  # noqa: E402
-    MECHANISMS, VolatileHookV2Strategy, iid_lognormal_path, markout_15s, run_arb_only)
+    MECHANISMS, VolatileHookV2Strategy, iid_lognormal_path, markout_15s, regime_path, run_arb_only)
 from arena_eval.exact_simple_amm.simulator import Arbitrageur, StrategyAMM  # noqa: E402
 
 SEEDS = tuple(range(40, 80))
@@ -36,18 +36,20 @@ def _bare(ax):
 
 
 # ----------------------------------------------------------------------------- matrix
-def run_matrix(seeds=SEEDS, sigma_bps=SIGMA_BPS, ts_bps=TS_BPS, delta_max_bps=DELTA_MAX_BPS, n_blocks=5000):
-    """Paired per-mechanism total LP markout. Returns {name: np.array over seeds}."""
+def run_matrix(seeds=SEEDS, sigma_bps=SIGMA_BPS, ts_bps=TS_BPS, delta_max_bps=DELTA_MAX_BPS, n_blocks=5000,
+               path_fn=None):
+    """Paired per-mechanism total LP markout. Returns {name: np.array over seeds}.
+    path_fn(seed) -> fair path overrides the default i.i.d.-lognormal GBM (e.g. regime_path)."""
     per = {n: [] for n in MECHANISMS}
     for s in seeds:
-        fair = iid_lognormal_path(n_blocks, sigma_bps, seed=s)
+        fair = path_fn(s) if path_fn is not None else iid_lognormal_path(n_blocks, sigma_bps, seed=s)
         for n, kw in MECHANISMS.items():
             tr = run_arb_only(VolatileHookV2Strategy(ts_bps=ts_bps, delta_max_bps=delta_max_bps, **kw), fair)
             per[n].append(markout_15s(fair, tr).sum())
     return {n: np.asarray(v) for n, v in per.items()}
 
 
-def plot_matrix(per: dict):
+def plot_matrix(per: dict, subtitle: str | None = None):
     """(A) cumulative LP markout per mechanism; (B) each mechanism's marginal effect."""
     names = list(per)
     means = np.array([per[n].mean() for n in names])
@@ -85,7 +87,8 @@ def plot_matrix(per: dict):
     ax[1].set_title("(B) isolated marginal effect of each mechanism\n(green = protects LVR, red = hurts)",
                     fontsize=10.5, fontweight="bold")
     _bare(ax[1])
-    fig.suptitle(f"Arb-only LVR lab — v2 mechanisms, isolated  (σ={SIGMA_BPS:.0f}bp/block, TS={TS_BPS:.0f}bp, "
+    sub = subtitle if subtitle is not None else f"σ={SIGMA_BPS:.0f}bp/block GBM"
+    fig.suptitle(f"Arb-only LVR lab — v2 mechanisms, isolated  ({sub}, TS={TS_BPS:.0f}bp, "
                  f"{len(per[names[0]])} paired seeds)", fontweight="bold", fontsize=11.5)
     fig.tight_layout()
     return fig
@@ -354,3 +357,54 @@ def show_branch_analysis():
          "note": "still negative → not bad luck"},
     ]
     return pd.DataFrame(rows).set_index("branch")
+
+
+# ============================================================================
+# Realistic return distribution: the calibrated regime-switching process.
+# ============================================================================
+def regime_returns(seeds=SEEDS, n_blocks=5000):
+    """Per-block returns (bp) of the calibrated regime process, pooled over seeds."""
+    rr = []
+    for s in seeds:
+        p = regime_path(n_blocks, s)
+        rr.append(np.diff(p) / p[:-1] * 1e4)
+    return np.concatenate(rr)
+
+
+def plot_return_distribution(seeds=SEEDS, n_blocks=5000, half_spread_bp=4.5, cutoff_bp=10.0):
+    """Calibrated regime returns vs a Gaussian at the SAME std: a tight middle (most moves
+    inside the no-arb band) with fat tails (which dominate LVR, since LVR ~ move^2)."""
+    rr = regime_returns(seeds, n_blocks); std = rr.std()
+    p_fire = float(np.mean(np.abs(rr) >= cutoff_bp))
+    fig, ax = plt.subplots(1, 2, figsize=(14.5, 4.8))
+    # (A) body, linear
+    b = np.linspace(-25, 25, 121); x = 0.5 * (b[:-1] + b[1:])
+    g = np.exp(-x ** 2 / (2 * std ** 2)) / (std * np.sqrt(2 * np.pi))
+    ax[0].hist(rr, bins=b, density=True, color=_BLUE, alpha=0.55, label="calibrated regime")
+    ax[0].plot(x, g, color=_RED, lw=2, label=f"Gaussian (σ={std:.1f}bp, matched)")
+    ax[0].axvspan(-half_spread_bp, half_spread_bp, color="grey", alpha=0.18, label="no-arb band (±TS/2)")
+    ax[0].set_xlabel("per-block fair return (bp)"); ax[0].set_ylabel("density")
+    ax[0].set_title("(A) body — tight peak: most moves stay inside the no-arb band\n(so most blocks have no arb)",
+                    fontsize=10, fontweight="bold")
+    ax[0].legend(fontsize=8.5); _bare(ax[0]); ax[0].grid(alpha=0.2)
+    # (B) tails, log-y
+    b2 = np.linspace(-60, 60, 121); x2 = 0.5 * (b2[:-1] + b2[1:])
+    g2 = np.exp(-x2 ** 2 / (2 * std ** 2)) / (std * np.sqrt(2 * np.pi))
+    ax[1].hist(rr, bins=b2, density=True, color=_BLUE, alpha=0.55, label="calibrated regime")
+    ax[1].plot(x2, g2, color=_RED, lw=2, label="Gaussian (matched σ)")
+    for c in (-cutoff_bp, cutoff_bp):
+        ax[1].axvline(c, color="#7d6608", ls="--", lw=1)
+    ax[1].set_yscale("log"); ax[1].set_xlabel("per-block fair return (bp)"); ax[1].set_ylabel("density (log)")
+    ax[1].set_title(f"(B) tails (log) — far fatter than Gaussian; max|r|≈{np.abs(rr).max():.0f}bp\n"
+                    f"exception cutoff ±10bp fires {p_fire:.0%} (Gaussian would: "
+                    f"{2 * (1 - 0.5 * (1 + _erf(cutoff_bp / std / 2 ** .5))):.0%})", fontsize=10, fontweight="bold")
+    ax[1].legend(fontsize=8.5); _bare(ax[1])
+    fig.suptitle("Calibrated WETH/USD 12s return distribution (the realistic process) — martingale, "
+                 f"std={std:.1f}bp, but fat-tailed", fontweight="bold", fontsize=11.5)
+    fig.tight_layout()
+    return fig
+
+
+def _erf(z):
+    import math
+    return math.erf(z)

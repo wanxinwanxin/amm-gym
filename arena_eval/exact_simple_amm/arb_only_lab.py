@@ -25,11 +25,16 @@ All off  ==>  flat symmetric TS/2 fee.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
 from arena_eval.core.types import IncomingSwap, TradeInfo
+from arena_eval.exact_simple_amm.dynamics import RegimeSwitchingReturnProcess
 from arena_eval.exact_simple_amm.simulator import Arbitrageur, StrategyAMM
+
+# calibrated WETH/USD 12s regime-switching process (analysis/ is gitignored; csvs force-added)
+_CALIB_DIR = Path(__file__).resolve().parents[2] / "analysis" / "weth_usdc_90d"
 
 _CAP = 0.99
 
@@ -126,6 +131,16 @@ def iid_lognormal_path(n_blocks: int, sigma_bps: float, seed: int, p0: float = 1
     sig = sigma_bps / 1e4
     r = sig * rng.standard_normal(n_blocks) - 0.5 * sig * sig
     return p0 * np.exp(np.cumsum(r))
+
+
+def regime_path(n_blocks: int, seed: int, p0: float = 100.0, calib_dir=_CALIB_DIR) -> np.ndarray:
+    """Fair path from the CALIBRATED WETH/USD 12s regime-switching process (the realistic return
+    distribution: tight middle, fat tails, vol clustering; still a martingale). Drop-in replacement
+    for iid_lognormal_path — same arb-only loop, just a different price process."""
+    calib_dir = Path(calib_dir)
+    proc = RegimeSwitchingReturnProcess(p0, calib_dir / "regimes_invcdf.csv",
+                                        calib_dir / "regimes_transition_matrix.csv", seed=seed)
+    return np.asarray([proc.step() for _ in range(n_blocks)])
 
 
 def run_arb_only(strategy, fair: np.ndarray, pool_value_usd: float = 1_000_000.0, p0: float = 100.0):

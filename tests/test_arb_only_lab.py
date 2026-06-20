@@ -6,7 +6,7 @@ import math
 
 from arena_eval.core.types import IncomingSwap
 from arena_eval.exact_simple_amm.arb_only_lab import (
-    VolatileHookV2Strategy, iid_lognormal_path, run_arb_only)
+    VolatileHookV2Strategy, iid_lognormal_path, regime_path, run_arb_only)
 from arena_eval.exact_simple_amm.simulator import Arbitrageur, StrategyAMM
 
 
@@ -81,3 +81,18 @@ def test_run_arb_only_produces_trades_and_is_deterministic():
     t1 = run_arb_only(VolatileHookV2Strategy(ts_bps=9.0), fair)
     t2 = run_arb_only(VolatileHookV2Strategy(ts_bps=9.0), fair)
     assert len(t1) > 0 and len(t1) == len(t2)
+
+
+def test_regime_path_shape_and_determinism():
+    p1 = regime_path(500, seed=1)
+    p2 = regime_path(500, seed=1)
+    p3 = regime_path(500, seed=2)
+    assert len(p1) == 500 and (p1 > 0).all()
+    assert (p1 == p2).all()        # deterministic per seed
+    assert not (p1 == p3).all()    # different seed -> different path
+
+
+def test_regime_path_drives_the_arb_loop():
+    fair = regime_path(500, seed=1)
+    trades = run_arb_only(VolatileHookV2Strategy(ts_bps=9.0), fair)
+    assert len(trades) > 0
