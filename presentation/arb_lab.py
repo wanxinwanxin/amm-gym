@@ -13,6 +13,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from arena_eval.core.types import IncomingSwap, TradeInfo  # noqa: E402
@@ -273,14 +274,13 @@ class FlatPlusException:
 
 
 def show_v2_decomposition(path=DEMO_PATH, ts_bps=9.0, beta=0.5, delta_max_bps=6.0, h_max_bps=7.0, cutoff_bps=10.0):
-    """Q1: how the doc's PERMANENT (h) and TEMPORARY (g) fee components evolve, f = h + g (bp)."""
+    """Q1: the doc's PERMANENT (h) and TEMPORARY (g) fee components per block, f = h + g (bp).
+    Returns a DataFrame (renders as a clean table in Jupyter)."""
     s = VolatileHookV2Strategy(ts_bps=ts_bps, beta=beta, delta_max_bps=delta_max_bps, h_max_bps=h_max_bps,
                                cutoff_bps=cutoff_bps, permanent_skew_on=True, temporary_widening_on=True,
                                exception_on=True)
     pool = StrategyAMM("p", s, 10_000.0, 1_000_000.0); pool.initialize(); arber = Arbitrageur()
-    print("FULL v2 fee decomposition (h=permanent, g=temporary, f=h+g; all bp). PI = inter-block mid change.")
-    print(f"{'blk':>3} {'fair':>7} {'PI':>7} | {'h_a->h_a*':>10} {'h_b->h_b*':>10} | {'g_a':>4} {'g_b':>5} | "
-          f"{'f_a':>4} {'f_b':>5} | {'midA':>9} {'arb':>5}")
+    rows = []
     prevmid = pool.spot_price
     for t, fp in enumerate(path):
         midb = pool.spot_price; pi = (midb - prevmid) / prevmid * 1e4
@@ -288,40 +288,43 @@ def show_v2_decomposition(path=DEMO_PATH, ts_bps=9.0, beta=0.5, delta_max_bps=6.
         pool.before_swap(is_buy=pool.spot_price < fp, size=None, block=t)
         ha1, hb1 = s._ha * 1e4, s._hb * 1e4; fa, fb = s._fa * 1e4, s._fb * 1e4
         arb = arber.execute_arb(pool, float(fp), t)
-        ad = "-" if arb is None else ("BUY" if arb.side == "sell" else "SELL")
-        print(f"{t:>3} {fp:>7.2f} {pi:>6.1f}b | {ha0:4.1f}->{ha1:4.1f} {hb0:4.1f}->{hb1:4.1f} | "
-              f"{fa - ha1:4.1f} {fb - hb1:5.1f} | {fa:4.1f} {fb:5.1f} | {pool.spot_price:9.4f} {ad:>5}")
+        ad = "–" if arb is None else ("BUY" if arb.side == "sell" else "SELL")
+        rows.append({"blk": t, "fair": f"{fp:.2f}", "PI (bp)": f"{pi:+.1f}",
+                     "h_a→h_a*": f"{ha0:.1f}→{ha1:.1f}", "h_b→h_b*": f"{hb0:.1f}→{hb1:.1f}",
+                     "g_a": f"{fa - ha1:.1f}", "g_b": f"{fb - hb1:.1f}", "f_a": f"{fa:.1f}", "f_b": f"{fb:.1f}",
+                     "mid after": f"{pool.spot_price:.4f}", "arb": ad})
         prevmid = midb
+    return pd.DataFrame(rows).set_index("blk")
 
 
-def _trace_markout(path, on, label):
+def _trace_rows(path, on, run):
     pool = StrategyAMM("p", FlatPlusException(on=on), 10_000.0, 1_000_000.0); pool.initialize(); arber = Arbitrageur()
-    print(f"\n----- {label} -----")
-    tot = 0.0
+    rows = []; tot = 0.0
     for t, fp in enumerate(path):
-        rxb, ryb = pool.reserves(); midb = pool.spot_price
+        midb = pool.spot_price
         pool.before_swap(is_buy=pool.spot_price < fp, size=None, block=t); fb = pool.bid_fee * 1e4
         arb = arber.execute_arb(pool, float(fp), t)
         if arb is None:
-            print(f" b{t}: fair={fp:.2f}  f_b={fb:4.1f}bp  midB={midb:.4f}  -> NO ARB")
+            rows.append({"run": run, "blk": t, "fair": f"{fp:.2f}", "f_b (bp)": f"{fb:.1f}", "arb": "–",
+                         "dx": "", "dy": "", "mid after": f"{midb:.4f}", "markout": ""})
             continue
         buy = arb.side == "sell"
         mk = (arb.amount_y - arb.amount_x * fp) if buy else (arb.amount_x * fp - arb.amount_y); tot += mk
-        rxa, rya = pool.reserves()
-        eq = (f"dy - dx*fair = {arb.amount_y:.2f} - {arb.amount_x:.3f}*{fp:.2f}" if buy
-              else f"dx*fair - dy = {arb.amount_x:.3f}*{fp:.2f} - {arb.amount_y:.2f}")
-        print(f" b{t}: fair={fp:.2f}  f_b={fb:4.1f}bp  {'BUY ' if buy else 'SELL'}  "
-              f"x:{rxb:.2f}->{rxa:.2f}  mid:{midb:.4f}->{pool.spot_price:.4f}  markout = {eq} = {mk:+.4f}")
-    print(f"   TOTAL markout = {tot:+.4f}")
-    return tot
+        rows.append({"run": run, "blk": t, "fair": f"{fp:.2f}", "f_b (bp)": f"{fb:.1f}",
+                     "arb": "BUY" if buy else "SELL", "dx": f"{arb.amount_x:.3f}", "dy": f"{arb.amount_y:.2f}",
+                     "mid after": f"{pool.spot_price:.4f}", "markout": f"{mk:+.4f}"})
+    return rows, tot
 
 
 def show_displacement_example(path=DEMO_PATH):
-    """Q-displacement: flat vs flat+exception on DEMO_PATH, with pool state + markout per block."""
-    a = _trace_markout(path, False, "FLAT (exception OFF)")
-    b = _trace_markout(path, True, "FLAT + EXCEPTION ON")
-    print(f"\n  net exception effect on this path = {b - a:+.4f}")
-    return a, b
+    """Q-displacement: flat vs flat+exception on DEMO_PATH, pool state + markout per block.
+    markout = dy − dx·fair (LP sells X) or dx·fair − dy (LP buys X). Returns a DataFrame."""
+    rf, tf = _trace_rows(path, False, "flat")
+    re, te = _trace_rows(path, True, "flat+exc")
+    df = pd.DataFrame(rf + re).set_index(["run", "blk"])
+    df.attrs["totals"] = (tf, te)
+    print(f"flat total = {tf:+.4f}   flat+exception total = {te:+.4f}   net exception effect = {te - tf:+.4f}")
+    return df
 
 
 def _path_effect(path):
@@ -336,14 +339,18 @@ def _path_effect(path):
 
 
 def show_branch_analysis():
-    """Q2 (not bad luck): after the +30bp jump fires the exception, branch on what happens next."""
+    """Q2 (not bad luck): after the +30bp up-jump fires the exception, branch on what happens next.
+    Returns a DataFrame of the exception's effect on each branch + the martingale averages."""
     c = _path_effect([100, 100, 100.30, 100.45, 100.45])              # continuation
     d = _path_effect([100, 100, 100.30, 100.15, 100.00, 100.00])      # reversion, then down
     u = _path_effect([100, 100, 100.30, 100.15, 100.30, 100.30])      # reversion, then back up
-    print("exception effect by branch after the +30bp up-jump (which fires the exception):")
-    print(f"  continuation (price keeps rising)        = {c:+.4f}   (INERT: continuation arb pays the ask)")
-    print(f"  reversion then b4 DOWN                    = {d:+.4f}   (displacement cost)")
-    print(f"  reversion then b4 UP                      = {u:+.4f}   (round-trip avoided)")
-    print(f"  reversion average (b4 50/50)             = {(d + u) / 2:+.4f}")
-    print(f"  full average (1/2 cont + 1/2 reversion)  = {0.5 * c + 0.5 * (d + u) / 2:+.4f}   <- still negative")
-    return dict(continuation=c, rev_down=d, rev_up=u)
+    rows = [
+        {"branch": "continuation (price keeps rising)", "exception effect ($)": f"{c:+.4f}",
+         "note": "inert — continuation arb pays the ask"},
+        {"branch": "reversion → b4 down", "exception effect ($)": f"{d:+.4f}", "note": "displacement cost"},
+        {"branch": "reversion → b4 up", "exception effect ($)": f"{u:+.4f}", "note": "round-trip avoided"},
+        {"branch": "reversion average (50/50)", "exception effect ($)": f"{(d + u) / 2:+.4f}", "note": ""},
+        {"branch": "full average (½ cont + ½ reversion)", "exception effect ($)": f"{0.5 * c + 0.5 * (d + u) / 2:+.4f}",
+         "note": "still negative → not bad luck"},
+    ]
+    return pd.DataFrame(rows).set_index("branch")
