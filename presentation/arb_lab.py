@@ -18,7 +18,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from arena_eval.core.types import IncomingSwap, TradeInfo  # noqa: E402
 from arena_eval.exact_simple_amm.arb_only_lab import (  # noqa: E402
-    MECHANISMS, VolatileHookV2Strategy, iid_lognormal_path, markout_15s, regime_path, run_arb_only)
+    MECHANISMS, VolatileHookV2Strategy, historical_paths, iid_lognormal_path, load_historical_mids,
+    markout_15s, regime_path, run_arb_only)
 from arena_eval.exact_simple_amm.simulator import Arbitrageur, StrategyAMM  # noqa: E402
 
 SEEDS = tuple(range(40, 80))
@@ -49,7 +50,7 @@ def run_matrix(seeds=SEEDS, sigma_bps=SIGMA_BPS, ts_bps=TS_BPS, delta_max_bps=DE
     return {n: np.asarray(v) for n, v in per.items()}
 
 
-def plot_matrix(per: dict, subtitle: str | None = None):
+def plot_matrix(per: dict, subtitle: str | None = None, n_unit: str = "paired seeds"):
     """(A) cumulative LP markout per mechanism; (B) each mechanism's marginal effect."""
     names = list(per)
     means = np.array([per[n].mean() for n in names])
@@ -89,7 +90,7 @@ def plot_matrix(per: dict, subtitle: str | None = None):
     _bare(ax[1])
     sub = subtitle if subtitle is not None else f"σ={SIGMA_BPS:.0f}bp/block GBM"
     fig.suptitle(f"Arb-only LVR lab — v2 mechanisms, isolated  ({sub}, TS={TS_BPS:.0f}bp, "
-                 f"{len(per[names[0]])} paired seeds)", fontweight="bold", fontsize=11.5)
+                 f"{len(per[names[0]])} {n_unit})", fontweight="bold", fontsize=11.5)
     fig.tight_layout()
     return fig
 
@@ -408,3 +409,154 @@ def plot_return_distribution(seeds=SEEDS, n_blocks=5000, half_spread_bp=4.5, cut
 def _erf(z):
     import math
     return math.erf(z)
+
+
+# ============================================================================
+# Historical replay: a THIRD way to run the lab — over the actual Binance
+# 12s series, sliced into real ~17h windows. Same marginal CDF as the regime
+# process, but the real serial structure (Moallemi: "correct correlations").
+# ============================================================================
+import json  # noqa: E402
+
+_HIST_CACHE = Path(__file__).resolve().parents[1] / "analysis" / "weth_usdc_90d" / "arb_historical_cache.json"
+
+
+def run_matrix_historical(n_blocks=5000, stride=None, ts_bps=TS_BPS, delta_max_bps=DELTA_MAX_BPS,
+                          cache=_HIST_CACHE, rebuild=False):
+    """4-mechanism matrix replayed over EVERY real ~17h window. Same metric as run_matrix
+    (net 15s-fair LP markout, $/window). Returns {per:{mech:array over windows}, vol_bp:array,
+    meta:{...}}. Cached to JSON (full run ~90s over ~1037 windows)."""
+    key = dict(n_blocks=n_blocks, stride=stride or n_blocks, ts_bps=ts_bps, delta_max_bps=delta_max_bps)
+    if cache and Path(cache).exists() and not rebuild:
+        d = json.loads(Path(cache).read_text())
+        if all(d["meta"].get(k) == v for k, v in key.items()):
+            return dict(per={k: np.asarray(v) for k, v in d["per"].items()},
+                        vol_bp=np.asarray(d["vol_bp"]), meta=d["meta"])
+    W = historical_paths(n_blocks, stride)
+    per = {n: [] for n in MECHANISMS}
+    for w in W:
+        for n, kw in MECHANISMS.items():
+            tr = run_arb_only(VolatileHookV2Strategy(ts_bps=ts_bps, delta_max_bps=delta_max_bps, **kw), w)
+            per[n].append(float(markout_15s(w, tr).sum()))
+    vol_bp = [float(np.diff(np.log(w)).std() * 1e4) for w in W]
+    meta = dict(n_windows=len(W), **key)
+    if cache:
+        Path(cache).write_text(json.dumps(dict(meta=meta, per=per, vol_bp=vol_bp)))
+    return dict(per={n: np.asarray(v) for n, v in per.items()}, vol_bp=np.asarray(vol_bp), meta=meta)
+
+
+def _protection(per, name="+ permanent skew"):
+    """% LVR reduction of mechanism `name` vs flat, paired across windows (LVR = -markout)."""
+    flat = per["flat TS/2"]; mech = per[name]
+    return float((mech.sum() - flat.sum()) / (-flat.sum()) * 100.0)
+
+
+def _boot_protection_ci(per, name="+ permanent skew", n_boot=2000, seed=0):
+    """Block-bootstrap CI for %protection over windows (windows ~ pseudo-replicated, so
+    resample whole windows to get an honest band on the mechanism contrast)."""
+    rng = np.random.default_rng(seed)
+    flat, mech = per["flat TS/2"], per[name]
+    n = len(flat); idx = rng.integers(0, n, size=(n_boot, n))
+    f = flat[idx].sum(1); m = mech[idx].sum(1)
+    pcts = (m - f) / (-f) * 100.0
+    return float(np.percentile(pcts, 2.5)), float(np.percentile(pcts, 97.5))
+
+
+def _process_returns_bp(kind, seeds=SEEDS, n_blocks=5000, sigma_bps=None):
+    """Per-block returns (bp) for serial-structure diagnostics. Historical uses the full
+    CONTIGUOUS series (returns computed within gap-free runs, then concatenated) so real
+    autocorrelation is not broken at window edges."""
+    if kind == "historical":
+        ts, mid = load_historical_mids()
+        runs = np.split(np.arange(len(ts)), np.flatnonzero(np.diff(ts) != 12) + 1)
+        return np.concatenate([np.diff(np.log(mid[r])) for r in runs if len(r) > 1]) * 1e4
+    if kind == "regime":
+        return regime_returns(seeds, n_blocks)
+    if kind == "gbm":
+        return np.concatenate([np.diff(np.log(iid_lognormal_path(n_blocks, sigma_bps, seed=s)))
+                               for s in seeds]) * 1e4
+    raise ValueError(kind)
+
+
+def _ac1(x):
+    x = np.asarray(x, float); x = x - x.mean()
+    return float(np.corrcoef(x[:-1], x[1:])[0, 1])
+
+
+def serial_diagnostics(seeds=SEEDS, n_blocks=5000, cutoff_bp=10.0):
+    """The Moallemi test: GBM and the regime process have the right marginal but the wrong
+    correlations. Compare, per process: return std; lag-1 autocorr of returns (≈0 = martingale,
+    all three); lag-1 autocorr of |returns| (vol clustering); and jump follow-through lift =
+    P(|r_{t+1}|≥cut | |r_t|≥cut) / P(|r|≥cut) (autocorrelated jumps — >1 means jumps cluster)."""
+    hist = _process_returns_bp("historical")
+    hstd = float(hist.std())
+    rows = []
+    for name, r in [(f"GBM (σ={hstd:.1f}bp, matched)", _process_returns_bp("gbm", seeds, n_blocks, hstd)),
+                    ("regime-switching", _process_returns_bp("regime", seeds, n_blocks)),
+                    ("historical replay", hist)]:
+        a = np.abs(r); big = a >= cutoff_bp; p = float(big.mean())
+        lift = float((big[:-1] & big[1:]).sum() / max(big[:-1].sum(), 1) / p) if p > 0 else float("nan")
+        rows.append(dict(process=name, std_bp=round(r.std(), 2), ac1_return=round(_ac1(r), 4),
+                         ac1_absreturn=round(_ac1(a), 4), p_big_pct=round(p * 100, 2),
+                         jump_followthrough_lift=round(lift, 2)))
+    return pd.DataFrame(rows)
+
+
+def compare_processes(seeds=SEEDS, n_blocks=5000, ts_bps=TS_BPS, delta_max_bps=DELTA_MAX_BPS, hist=None):
+    """Marginal mechanism effects ($/run) under the three processes, side by side. GBM is run
+    at σ matched to the historical std so the only differences are tails (GBM→regime) and
+    correlations (regime→historical). Returns a tidy DataFrame."""
+    hist = hist if hist is not None else run_matrix_historical(n_blocks, ts_bps=ts_bps, delta_max_bps=delta_max_bps)
+    hstd = float(_process_returns_bp("historical").std())
+    gbm = run_matrix(seeds, hstd, ts_bps, delta_max_bps, n_blocks)
+    reg = run_matrix(seeds, None, ts_bps, delta_max_bps, n_blocks, path_fn=lambda s: regime_path(n_blocks, s))
+    names = list(MECHANISMS)
+    rows = []
+    for label, per in [(f"GBM (σ={hstd:.1f}bp)", gbm), ("regime-switching", reg), ("historical replay", hist["per"])]:
+        m = {n: per[n].mean() for n in names}
+        rows.append(dict(process=label, flat=round(m[names[0]], 1),
+                         d_perm=round(m[names[1]] - m[names[0]], 1),
+                         d_temp=round(m[names[2]] - m[names[1]], 1),
+                         d_exc=round(m[names[3]] - m[names[2]], 1),
+                         perm_protect_pct=round(_protection(per), 2)))
+    return pd.DataFrame(rows)
+
+
+def plot_historical_matrix(hist):
+    """Headline: the 4-mechanism matrix replayed over the real series (reuses plot_matrix)."""
+    return plot_matrix(hist["per"], subtitle="actual Binance ETHUSDT 12s, ~17h windows",
+                       n_unit="real windows")
+
+
+def plot_historical_vol_protection(hist, n_bins=6):
+    """%LVR-protection from the permanent skew vs the window's realized vol, recovered from
+    REAL windows — the analogue of the synthetic σ-sweep (tests the ∝1/σ finding on real data)."""
+    per, vol = hist["per"], hist["vol_bp"]
+    flat, perm = per["flat TS/2"], per["+ permanent skew"]
+    edges = np.quantile(vol, np.linspace(0, 1, n_bins + 1))
+    edges[-1] += 1e-9
+    binid = np.clip(np.digitize(vol, edges) - 1, 0, n_bins - 1)
+    xs, ys, ns = [], [], []
+    for b in range(n_bins):
+        m = binid == b
+        if m.sum() < 5:
+            continue
+        xs.append(float(np.median(vol[m])))
+        ys.append(float((perm[m].sum() - flat[m].sum()) / (-flat[m].sum()) * 100.0))
+        ns.append(int(m.sum()))
+    xs, ys = np.array(xs), np.array(ys)
+    fig, ax = plt.subplots(figsize=(8.2, 5.0))
+    ax.plot(xs, ys, "o-", color=_GREEN, lw=2, ms=7)
+    for x, y, k in zip(xs, ys, ns):
+        ax.annotate(f"{y:.1f}%\nn={k}", (x, y), fontsize=8, ha="center", va="bottom", xytext=(0, 5),
+                    textcoords="offset points")
+    # 1/sigma reference, anchored at the lowest-vol bin
+    ref = ys[0] * xs[0] / xs
+    ax.plot(xs, ref, ":", color=_RED, lw=1.5, label="∝ 1/σ  (anchored at first bin)")
+    ax.axhline(0, color="grey", lw=0.8)
+    ax.set_xlabel("window realized vol  (bp/block)"); ax.set_ylabel("permanent-skew LVR protection  (%)")
+    ax.set_title("Permanent-skew protection vs realized vol — recovered from REAL windows\n"
+                 "(does the synthetic ∝1/σ law survive real correlations?)", fontsize=10.5, fontweight="bold")
+    ax.legend(fontsize=9); _bare(ax)
+    fig.tight_layout()
+    return fig
