@@ -143,6 +143,39 @@ def regime_path(n_blocks: int, seed: int, p0: float = 100.0, calib_dir=_CALIB_DI
     return np.asarray([proc.step() for _ in range(n_blocks)])
 
 
+# calibrated raw 12s mid series (force-pulled by scripts/calibration/pull_binance_12s_series.py)
+_MID_CACHE = _CALIB_DIR / "binance_eth_12s_mid_2y.parquet"
+
+
+def load_historical_mids(path=_MID_CACHE):
+    """The cached 2-year Binance ETHUSDT 12s mid series. Returns (ts:int64 unix-s, mid:float64)."""
+    import pandas as pd  # local: the arb loop itself needs only numpy
+    df = pd.read_parquet(path)
+    return df["ts"].to_numpy(np.int64), df["mid"].to_numpy(np.float64)
+
+
+def historical_paths(n_blocks: int = 5000, stride: int | None = None, p0: float = 100.0,
+                     bucket_s: int = 12, path=_MID_CACHE) -> list[np.ndarray]:
+    """Slice the ACTUAL 12s mid series into ~17h (n_blocks) windows for replay as the fair path.
+
+    A third way to run the lab, alongside iid_lognormal_path (synthetic martingale) and
+    regime_path (same marginal CDF, but IID within a regime). Replay keeps the REAL serial
+    structure — autocorrelated jumps, vol clustering — that both synthetic processes assume
+    away (Moallemi: "same cdf but correct correlations"). Each window is gap-safe (never
+    straddles a >12s data hole) and rescaled to start at p0 (multiplicative, so the realized
+    returns are preserved exactly). stride=None => non-overlapping (honest, independent-ish);
+    a smaller stride yields more, overlapping (pseudo-replicated) windows."""
+    ts, mid = load_historical_mids(path)
+    stride = n_blocks if stride is None else int(stride)
+    runs = np.split(np.arange(len(ts)), np.flatnonzero(np.diff(ts) != bucket_s) + 1)
+    out = []
+    for run in runs:
+        for s in range(0, len(run) - n_blocks + 1, stride):
+            w = mid[run[s:s + n_blocks]]
+            out.append(w / w[0] * p0)
+    return out
+
+
 def run_arb_only(strategy, fair: np.ndarray, pool_value_usd: float = 1_000_000.0, p0: float = 100.0):
     """One TOB arb per block against `fair`. Returns the list of arb trades:
     (block, trader_side, amount_x, amount_y, fee_bps_paid)."""

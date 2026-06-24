@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
+
+import numpy as np
+import pytest
 
 from arena_eval.core.types import IncomingSwap
 from arena_eval.exact_simple_amm.arb_only_lab import (
-    VolatileHookV2Strategy, iid_lognormal_path, regime_path, run_arb_only)
+    _MID_CACHE, VolatileHookV2Strategy, historical_paths, iid_lognormal_path, load_historical_mids,
+    regime_path, run_arb_only)
 from arena_eval.exact_simple_amm.simulator import Arbitrageur, StrategyAMM
+
+_HAVE_MIDS = Path(_MID_CACHE).exists()
+_needs_mids = pytest.mark.skipif(not _HAVE_MIDS, reason="raw 12s mid cache not present (run pull_binance_12s_series.py)")
 
 
 def _bs(s, block, spot, x=10_000.0):
@@ -95,4 +103,33 @@ def test_regime_path_shape_and_determinism():
 def test_regime_path_drives_the_arb_loop():
     fair = regime_path(500, seed=1)
     trades = run_arb_only(VolatileHookV2Strategy(ts_bps=9.0), fair)
+    assert len(trades) > 0
+
+
+@_needs_mids
+def test_historical_paths_rescaled_and_return_preserving():
+    W = historical_paths(5000)
+    assert len(W) > 500
+    assert all(len(w) == 5000 for w in W)
+    assert all(abs(w[0] - 100.0) < 1e-9 for w in W)          # each window rescaled to start at p0
+    ts, mid = load_historical_mids()
+    raw = mid[:5000]                                          # 1st window is the head of the series
+    assert np.allclose(np.diff(np.log(raw)), np.diff(np.log(W[0])), atol=1e-10)   # returns preserved
+
+
+@_needs_mids
+def test_historical_paths_count_matches_gap_aware_nonoverlap():
+    # windows must be non-overlapping AND never straddle a >12s data gap: the count must equal
+    # the per-contiguous-run slice count computed independently here.
+    ts, _ = load_historical_mids()
+    runs = np.split(np.arange(len(ts)), np.flatnonzero(np.diff(ts) != 12) + 1)
+    expected = sum(len(r) // 5000 for r in runs if len(r) >= 5000)
+    assert len(historical_paths(5000)) == expected
+
+
+@_needs_mids
+def test_historical_paths_deterministic_and_drives_arb_loop():
+    W1, W2 = historical_paths(5000), historical_paths(5000)
+    assert len(W1) == len(W2) and np.allclose(W1[0], W2[0])
+    trades = run_arb_only(VolatileHookV2Strategy(ts_bps=9.0), W1[0])
     assert len(trades) > 0
