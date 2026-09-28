@@ -11,7 +11,12 @@ import numpy as np
 
 from arena_eval.core.types import BatchResult, IncomingSwap, SimulationResult, TradeInfo
 from arena_eval.exact_simple_amm.config import ExactSimpleAMMConfig
-from arena_eval.exact_simple_amm.dynamics import EmpiricalImpactRetailTrader, EmpiricalUSDSizeRetailTrader, RegimeSwitchingReturnProcess
+from arena_eval.exact_simple_amm.dynamics import (
+    EmpiricalImpactRetailTrader,
+    EmpiricalUSDSizeRetailTrader,
+    RegimeSwitchingReturnProcess,
+    RetailVolScaling,
+)
 from arena_eval.exact_simple_amm.strategies import ExactSimpleAMMStrategy, FixedFeeStrategy
 
 
@@ -74,8 +79,10 @@ class RetailTrader:
         size_sigma: float,
         buy_prob: float,
         seed: int,
+        vol_scaling: RetailVolScaling | None = None,
     ) -> None:
         self.arrival_rate = float(arrival_rate)
+        self.vol_scaling = vol_scaling or RetailVolScaling()
         self.buy_prob = float(buy_prob)
         self.size_sigma = max(float(size_sigma), 0.01)
         mean = max(float(mean_size), 0.01)
@@ -88,14 +95,19 @@ class RetailTrader:
         *,
         fair_price: float,
         reference_amm=None,
+        vol_bps: float | None = None,
     ) -> list[RetailOrder]:
         del fair_price, reference_amm
-        if self.arrival_rate <= 0.0:
+        arrival_mult, size_mult = self.vol_scaling.multipliers(vol_bps)
+        rate = self.arrival_rate * arrival_mult
+        if rate <= 0.0:
             return []
-        n_orders = int(self.rng.poisson(self.arrival_rate))
+        n_orders = int(self.rng.poisson(rate))
         if n_orders == 0:
             return []
         sizes = self.rng.lognormal(self._ln_mu, self._ln_sigma, size=n_orders)
+        if size_mult != 1.0:
+            sizes = sizes * size_mult
         sides = self.rng.random(size=n_orders)
         return [
             RetailOrder(side="buy" if side < self.buy_prob else "sell", size=float(size))
@@ -558,6 +570,18 @@ class ExactSimpleAMMSimulator:
         )
         self.price_process = self._build_price_process()
         self.retail_trader = self._build_retail_trader()
+        # Volatility tracker feeding the retail generator: EWMA of squared per-step log
+        # fair-price returns. Seeded lazily from the first observed fair price so a
+        # price process swapped in after construction (replay) does not create a
+        # spurious first return against config.initial_price.
+        initial_vol_bps = (
+            self.config.retail_vol_initial_bps
+            if self.config.retail_vol_initial_bps is not None
+            else self.config.retail_vol_reference_bps
+        )
+        self.retail_vol_var = (float(initial_vol_bps) * 1e-4) ** 2
+        self._retail_vol_decay = 0.5 ** (1.0 / float(self.config.retail_vol_half_life_steps))
+        self._retail_vol_prev_fair: float | None = None
         self.arbitrageur = Arbitrageur()
         self.router = OrderRouter()
         self.submission.initialize()
@@ -610,6 +634,7 @@ class ExactSimpleAMMSimulator:
                 self.config.retail_size_sigma,
                 self.config.retail_buy_prob,
                 seed=self.seed + 1,
+                vol_scaling=self.config.retail_vol_scaling,
             )
         if self.config.retail_flow_kind == "empirical_impact":
             if not self.config.retail_impact_percentiles_path:
@@ -629,6 +654,7 @@ class ExactSimpleAMMSimulator:
                 initial_x=initial_x,
                 initial_y=initial_y,
                 seed=self.seed + 1,
+                vol_scaling=self.config.retail_vol_scaling,
             )
         if self.config.retail_flow_kind == "empirical_usd_size":
             if not self.config.retail_usd_quantiles_path:
@@ -638,8 +664,25 @@ class ExactSimpleAMMSimulator:
                 self.config.retail_usd_quantiles_path,
                 buy_prob=self.config.retail_buy_prob,
                 seed=self.seed + 1,
+                vol_scaling=self.config.retail_vol_scaling,
             )
         raise ValueError(f"Unsupported retail_flow_kind: {self.config.retail_flow_kind}")
+
+    def _update_retail_vol(self, fair_price: float) -> float:
+        """Advance the EWMA volatility tracker with this step's fair price; returns the
+        current estimate in bps per step."""
+        prev = self._retail_vol_prev_fair
+        self._retail_vol_prev_fair = float(fair_price)
+        if prev is not None and prev > 0.0 and fair_price > 0.0:
+            log_return = math.log(fair_price / prev)
+            decay = self._retail_vol_decay
+            self.retail_vol_var = decay * self.retail_vol_var + (1.0 - decay) * log_return * log_return
+        return math.sqrt(self.retail_vol_var) * 1e4
+
+    @property
+    def retail_vol_bps(self) -> float:
+        """Current EWMA estimate of per-step fair-price volatility, bps per step."""
+        return math.sqrt(self.retail_vol_var) * 1e4
 
     def _retail_reference_amm(self) -> StrategyAMM:
         if self.config.retail_impact_reference_venue == "submission":
@@ -678,6 +721,7 @@ class ExactSimpleAMMSimulator:
         timestamp = self.current_step
         fair_price = self.price_process.step()
         self.current_fair_price = fair_price
+        retail_vol_bps = self._update_retail_vol(fair_price)
         submission_initial_value = self.config.submission_initial_value
         normalizer_initial_value = self.config.normalizer_initial_value
         prev_submission_trade_count = self.submission_trade_count
@@ -801,6 +845,7 @@ class ExactSimpleAMMSimulator:
         orders = self.retail_trader.generate_orders(
             fair_price=fair_price,
             reference_amm=self._retail_reference_amm(),
+            vol_bps=retail_vol_bps,
         )
         trades = self.router.route_orders(orders, self.submission, self.normalizer, fair_price, timestamp)
         for trade in trades:
@@ -849,6 +894,7 @@ class ExactSimpleAMMSimulator:
         return {
             "timestamp": timestamp,
             "fair_price": fair_price,
+            "retail_vol_bps": retail_vol_bps,
             "submission_trade_occurred": self.submission_trade_count > prev_submission_trade_count,
             "last_submission_trade": self.last_submission_trade,
             "n_orders": len(orders),

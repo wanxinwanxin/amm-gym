@@ -1,0 +1,94 @@
+{
+ "sample": {
+  "days": 664,
+  "first_day": "2024-11-07",
+  "last_day": "2026-09-21",
+  "detrend_window_days": 61
+ },
+ "elasticities": {
+  "swaps": {
+   "raw": 0.49356861266851904,
+   "raw_corr": 0.5998671652073425,
+   "detrended": 0.4549567423709859,
+   "detrended_corr": 0.6324713382792374
+  },
+  "usd": {
+   "raw": 1.2028283565686202,
+   "raw_corr": 0.6438659915427796,
+   "detrended": 1.2054155114917964,
+   "detrended_corr": 0.6743183199006005
+  },
+  "wallets": {
+   "raw": 0.4887529574688352,
+   "raw_corr": 0.5949287241095095,
+   "detrended": 0.43631972739549557,
+   "detrended_corr": 0.6638805963074698
+  }
+ },
+ "regime_cut_points_bps": [
+  2.9776666666666665,
+  3.9929999999999994
+ ],
+ "regime_table": {
+  "calm": {
+   "days": 212.0,
+   "vol_bps": 2.266504716981132,
+   "swaps": 668.9952830188679,
+   "usd": 4265894.72995283,
+   "wallets": 518.5754716981132
+  },
+  "mid": {
+   "days": 196.0,
+   "vol_bps": 3.476801020408163,
+   "swaps": 834.2908163265306,
+   "usd": 7199566.783520408,
+   "wallets": 651.2551020408164
+  },
+  "volatile": {
+   "days": 256.0,
+   "vol_bps": 5.351578125,
+   "swaps": 1048.57421875,
+   "usd": 12050663.301796876,
+   "wallets": 814.16015625
+  },
+  "volatile_over_calm": {
+   "swaps": 1.5673865651462697,
+   "usd": 2.8248852971414338,
+   "wallets": 1.5699935702395895
+  }
+ },
+ "regime_table_last_12_months": {
+  "calm": {
+   "days": 141.0,
+   "vol_bps": 2.1789787234042555,
+   "swaps": 599.1347517730496,
+   "usd": 4191574.7065957445,
+   "wallets": 457.07801418439715
+  },
+  "mid": {
+   "days": 103.0,
+   "vol_bps": 3.445631067961165,
+   "swaps": 744.242718446602,
+   "usd": 6232715.293883495,
+   "wallets": 556.1650485436893
+  },
+  "volatile": {
+   "days": 108.0,
+   "vol_bps": 5.35,
+   "swaps": 873.9629629629629,
+   "usd": 8570189.02388889,
+   "wallets": 653.1851851851852
+  },
+  "volatile_over_calm": {
+   "swaps": 1.458708513196072,
+   "usd": 2.0446227548808995,
+   "wallets": 1.429045294052742
+  }
+ },
+ "recommended": {
+  "retail_arrival_vol_elasticity": 0.45,
+  "retail_size_vol_elasticity": 0.75,
+  "retail_vol_reference_bps": 3.74,
+  "note": "arrival = detrended swap-count elasticity; size = USD elasticity minus count elasticity (mean size elasticity); reference = mean day vol of the replay sample so the multiplier averages ~1"
+ }
+}

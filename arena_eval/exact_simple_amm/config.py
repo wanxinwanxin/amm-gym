@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from arena_eval.exact_simple_amm.dynamics import RetailVolScaling
+
 ROOT = Path(__file__).resolve().parents[2]
 ANALYSIS_DIR = ROOT / "analysis" / "weth_usdc_90d"
 DEFAULT_REGIME_INVCDF_PATH = ANALYSIS_DIR / "regimes_invcdf.csv"
@@ -26,6 +28,18 @@ EMPIRICAL_ROUTER_ARRIVAL_RATE = 186_085 / 645_123
 #   buy_eth / (buy_eth + sell_eth) = 45_659 / 98_676 = 0.4627
 EMPIRICAL_PARENT_ORDER_ARRIVAL_RATE = 98_676 / 216_000
 EMPIRICAL_PARENT_ORDER_BUY_PROB = 0.4627
+# Volatility elasticity of retail flow. Uniswap front-end ETH/USDC swaps on mainnet
+# (uniswap-labs.core.swaps, completed, 2024-11-07..2026-09-21) regressed in logs on the
+# day's realized 12 s Binance ETHUSDT volatility, detrended with a 61-day rolling
+# median: daily swap count elasticity 0.45, daily USD volume 1.2, so mean order size
+# scales with exponent 1.2 - 0.45 = 0.75. Volatile-tercile days carry 1.6x the swaps
+# and 2.8x the USD of calm-tercile days. Reference 3.7 bps/step is the mean day vol of
+# the 2023-11..2025-11 replay sample, so the arrival multiplier averages ~1 over days.
+# See analysis/weth_usdc_90d/retail_vol_elasticity.md and
+# scripts/calibration/fit_retail_vol_elasticity.py.
+EMPIRICAL_RETAIL_ARRIVAL_VOL_ELASTICITY = 0.45
+EMPIRICAL_RETAIL_SIZE_VOL_ELASTICITY = 0.75
+EMPIRICAL_RETAIL_VOL_REFERENCE_BPS = 3.7
 
 @dataclass(frozen=True)
 class ExactSimpleAMMConfig:
@@ -69,10 +83,44 @@ class ExactSimpleAMMConfig:
     # strategies whose surcharge is paid by the same-block backrun. Default False
     # leaves existing configs unchanged (arb only at the top of the block).
     bottom_of_block_arb: bool = False
+    # Volatility elasticity of retail flow. Default 0/0 => constant-rate retail, bit-for-bit
+    # unchanged. When either elasticity is non-zero the simulator tracks an EWMA of squared
+    # per-step log fair-price returns (half-life retail_vol_half_life_steps; 1800 steps =
+    # 6 h at 12 s) and hands the retail generator vol_bps = sqrt(EWMA) * 1e4 every step.
+    # The generator scales its Poisson rate by ratio ** retail_arrival_vol_elasticity and
+    # its USD order sizes by ratio ** retail_size_vol_elasticity, with
+    # ratio = clip(vol_bps / retail_vol_reference_bps, retail_vol_ratio_min, retail_vol_ratio_max).
+    # The tracker starts at retail_vol_initial_bps (None => the reference, multiplier 1);
+    # pass the previous day's realized vol to avoid a warm-up bias in short runs.
+    # Calibrated values: EMPIRICAL_RETAIL_*_VOL_ELASTICITY above.
+    retail_arrival_vol_elasticity: float = 0.0
+    retail_size_vol_elasticity: float = 0.0
+    retail_vol_reference_bps: float = EMPIRICAL_RETAIL_VOL_REFERENCE_BPS
+    retail_vol_ratio_min: float = 0.25
+    retail_vol_ratio_max: float = 4.0
+    retail_vol_half_life_steps: float = 1800.0
+    retail_vol_initial_bps: float | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.submission_liquidity_fraction) or self.submission_liquidity_fraction <= 0.0:
             raise ValueError("submission_liquidity_fraction must be positive and finite")
+        self.retail_vol_scaling  # validates the elasticity / reference / clip fields
+        if not (math.isfinite(self.retail_vol_half_life_steps) and self.retail_vol_half_life_steps > 0.0):
+            raise ValueError("retail_vol_half_life_steps must be positive and finite")
+        if self.retail_vol_initial_bps is not None and not (
+            math.isfinite(self.retail_vol_initial_bps) and self.retail_vol_initial_bps >= 0.0
+        ):
+            raise ValueError("retail_vol_initial_bps must be non-negative and finite")
+
+    @property
+    def retail_vol_scaling(self) -> RetailVolScaling:
+        return RetailVolScaling(
+            arrival_elasticity=float(self.retail_arrival_vol_elasticity),
+            size_elasticity=float(self.retail_size_vol_elasticity),
+            reference_bps=float(self.retail_vol_reference_bps),
+            ratio_min=float(self.retail_vol_ratio_min),
+            ratio_max=float(self.retail_vol_ratio_max),
+        )
 
     @property
     def submission_initial_x(self) -> float:
@@ -112,8 +160,22 @@ class ExactSimpleAMMConfig:
         cls,
         seed: int,
         retail_mode: str = "empirical_impact",
+        *,
+        vol_elastic_retail: bool = False,
     ) -> "ExactSimpleAMMConfig":
+        """``vol_elastic_retail=True`` (empirical_usd_size only) switches on the calibrated
+        volatility elasticity of retail arrivals and sizes; the default keeps the
+        constant-rate flow every existing config uses."""
         if retail_mode == "empirical_usd_size":
+            vol_kwargs = (
+                dict(
+                    retail_arrival_vol_elasticity=EMPIRICAL_RETAIL_ARRIVAL_VOL_ELASTICITY,
+                    retail_size_vol_elasticity=EMPIRICAL_RETAIL_SIZE_VOL_ELASTICITY,
+                    retail_vol_reference_bps=EMPIRICAL_RETAIL_VOL_REFERENCE_BPS,
+                )
+                if vol_elastic_retail
+                else {}
+            )
             return cls(
                 evaluator_kind="real_data",
                 price_process_kind="regime_switching",
@@ -124,7 +186,10 @@ class ExactSimpleAMMConfig:
                 regime_transition_path=str(DEFAULT_REGIME_TRANSITION_PATH),
                 retail_usd_quantiles_path=str(DEFAULT_RETAIL_USD_QUANTILES_PATH),
                 normalizer_tracks_fair=True,
+                **vol_kwargs,
             )
+        if vol_elastic_retail:
+            raise ValueError("vol_elastic_retail is only supported with retail_mode='empirical_usd_size'")
         return cls(
             evaluator_kind="real_data",
             price_process_kind="regime_switching",

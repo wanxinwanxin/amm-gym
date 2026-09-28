@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -18,6 +19,50 @@ class _ReferenceAMM(Protocol):
 
     @property
     def spot_price(self) -> float: ...
+
+
+@dataclass(frozen=True)
+class RetailVolScaling:
+    """Volatility elasticity of retail flow.
+
+    Scales a retail generator's Poisson arrival rate by ``ratio ** arrival_elasticity``
+    and its order sizes by ``ratio ** size_elasticity``, where
+    ``ratio = clip(vol_bps / reference_bps, ratio_min, ratio_max)`` and ``vol_bps`` is
+    the simulator's running estimate of the per-step fair-price volatility (bps per
+    step). Both elasticities default to 0, which reproduces the constant-rate
+    generators exactly: same RNG draws, same orders.
+
+    Calibration (Uniswap front-end ETH/USDC swaps on mainnet vs the day's realized
+    12 s volatility, 2024-11 .. 2026-09; ``analysis/weth_usdc_90d/retail_vol_elasticity.md``):
+    daily swap count elasticity ~0.45, daily USD volume elasticity ~1.2, so
+    ``arrival_elasticity=0.45`` and ``size_elasticity=0.75`` reproduce both.
+    """
+
+    arrival_elasticity: float = 0.0
+    size_elasticity: float = 0.0
+    reference_bps: float = 3.7
+    ratio_min: float = 0.25
+    ratio_max: float = 4.0
+
+    def __post_init__(self) -> None:
+        for name in ("arrival_elasticity", "size_elasticity"):
+            if not math.isfinite(getattr(self, name)):
+                raise ValueError(f"{name} must be finite")
+        if not (math.isfinite(self.reference_bps) and self.reference_bps > 0.0):
+            raise ValueError("reference_bps must be positive and finite")
+        if not (0.0 < self.ratio_min <= self.ratio_max) or not math.isfinite(self.ratio_max):
+            raise ValueError("need 0 < ratio_min <= ratio_max < inf")
+
+    @property
+    def active(self) -> bool:
+        return self.arrival_elasticity != 0.0 or self.size_elasticity != 0.0
+
+    def multipliers(self, vol_bps: float | None) -> tuple[float, float]:
+        """(arrival multiplier, size multiplier) for the given volatility estimate."""
+        if vol_bps is None or not self.active or not math.isfinite(vol_bps):
+            return 1.0, 1.0
+        ratio = min(max(float(vol_bps) / self.reference_bps, self.ratio_min), self.ratio_max)
+        return ratio ** self.arrival_elasticity, ratio ** self.size_elasticity
 
 
 class RegimeSwitchingReturnProcess:
@@ -90,8 +135,12 @@ class EmpiricalImpactRetailTrader:
         initial_x: float,
         initial_y: float,
         seed: int | None = None,
+        vol_scaling: RetailVolScaling | None = None,
     ) -> None:
         self.arrival_rate = float(arrival_rate)
+        self.vol_scaling = vol_scaling or RetailVolScaling()
+        if self.vol_scaling.size_elasticity != 0.0:
+            raise ValueError("EmpiricalImpactRetailTrader samples price impacts, not USD sizes; size_elasticity must be 0")
         self.impact_percentiles_path = Path(impact_percentiles_path)
         self.impact_column = impact_column
         self.reference_venue = reference_venue
@@ -114,12 +163,15 @@ class EmpiricalImpactRetailTrader:
         *,
         fair_price: float,
         reference_amm: _ReferenceAMM | None = None,
+        vol_bps: float | None = None,
     ) -> list["RetailOrder"]:
         from arena_eval.exact_simple_amm.simulator import RetailOrder
 
-        if self.arrival_rate <= 0.0:
+        arrival_mult, _ = self.vol_scaling.multipliers(vol_bps)
+        rate = self.arrival_rate * arrival_mult
+        if rate <= 0.0:
             return []
-        n_orders = int(self.rng.poisson(self.arrival_rate))
+        n_orders = int(self.rng.poisson(rate))
         if n_orders == 0:
             return []
         impacts = np.interp(self.rng.random(size=n_orders) * 100.0, self.pct_grid, self.impact_values)
@@ -178,8 +230,10 @@ class EmpiricalUSDSizeRetailTrader:
         *,
         buy_prob: float = 0.5,
         seed: int | None = None,
+        vol_scaling: RetailVolScaling | None = None,
     ) -> None:
         self.arrival_rate = float(arrival_rate)
+        self.vol_scaling = vol_scaling or RetailVolScaling()
         self.usd_quantiles_path = Path(usd_quantiles_path)
         self.buy_prob = float(buy_prob)
         self.pct_grid, self.size_values = self._load_percentiles(self.usd_quantiles_path)
@@ -197,13 +251,16 @@ class EmpiricalUSDSizeRetailTrader:
         *,
         fair_price: float,
         reference_amm: _ReferenceAMM | None = None,
+        vol_bps: float | None = None,
     ) -> list["RetailOrder"]:
         from arena_eval.exact_simple_amm.simulator import RetailOrder
 
         del fair_price, reference_amm  # not needed for USD-size sampling
-        if self.arrival_rate <= 0.0:
+        arrival_mult, size_mult = self.vol_scaling.multipliers(vol_bps)
+        rate = self.arrival_rate * arrival_mult
+        if rate <= 0.0:
             return []
-        n_orders = int(self.rng.poisson(self.arrival_rate))
+        n_orders = int(self.rng.poisson(rate))
         if n_orders == 0:
             return []
         usd_sizes = np.interp(
@@ -211,6 +268,8 @@ class EmpiricalUSDSizeRetailTrader:
             self.pct_grid,
             self.size_values,
         )
+        if size_mult != 1.0:
+            usd_sizes = usd_sizes * size_mult
         orders: list[RetailOrder] = []
         for usd_size in usd_sizes.tolist():
             if usd_size <= 0.0:
